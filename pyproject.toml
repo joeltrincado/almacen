@@ -1,0 +1,54 @@
+[project]
+name = "Control almacen"
+version = "1.0.0"
+description = "Aplicacion para el control de entradas y salidas de prodcutos"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "Joel Trincado", email = "joel@tectronic.mx" }
+]
+dependencies = [
+    "flet==0.28.2",    # Flet para la interfaz de usuario
+    "pandas",           # Si usas pandas para la manipulación de datos
+    "openpyxl"
+]
+
+[tool.flet]
+org = "tectronic.mx"    # Nombre de la organización en notación de dominio invertido
+product = "Control de almacen"  # Nombre de la app para Android/iOS
+company = "Corporacion Tectronic"      # Nombre de la empresa
+copyright = "Copyright (C) 2025 by Corporacion Tectronic"  # Información de copyright
+compile.app = true # --compile-app
+compile.packages = true # --compile-packages
+compile.cleanup = true # --cleanup-on-compile
+
+[tool.flet.app]
+path = "src"  # Ruta del directorio donde se encuentra el código fuente
+
+[tool.flet.app.boot_screen]
+show = true
+message = "Cargando..."
+
+[tool.flet.splash]
+color = "#FFFF00" # --splash-color
+dark_color = "#8B8000" # --splash-dark-color
+web = false # --no-web-splash
+ios = false # --no-ios-splash
+android = true # --android-splash
+
+[tool.flet.app.startup_screen]
+show = true
+color = "#FFFF00"
+dark_color = "#8B8000"
+message = "Iniciando CodeAl"
+
+[tool.uv]
+dev-dependencies = [
+    "flet[all]==0.28.2",  # Dependencia de Flet para desarrollo con todos los extras
+]
+
+[tool.poetry]
+package-mode = false  # Desactivar el modo de paquete
+
+[tool.poetry.group.dev.dependencies]
+flet = {extras = ["all"], version = "0.28.2"}  # Dependencia para desarrollo
