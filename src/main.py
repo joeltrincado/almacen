@@ -25,17 +25,24 @@ def main(page: ft.Page):
         "last_warehouse_id": None,     # último almacén mostrado en "Productos"
         "pending_file": None,          # archivo pendiente de importar
         "selected_wh_id": None,        # almacén elegido para importar
+        "replace_stock": False,        # NUEVO: modo reemplazo de existencias
     }
 
-    # ---- Entrada de productos (estado) ----
+    # ---- Entrada / Salida (estado) ----
     entry_state = {
         "warehouse_id": None,
         "lines": {},  # code -> {"name": str, "qty": int}
     }
     exit_state = {
-    "warehouse_id": None,
-    "lines": {},  # code -> {"name": str, "qty": int}
-        }
+        "warehouse_id": None,
+        "lines": {},  # code -> {"name": str, "qty": int}
+    }
+
+    # Sobre-extracción (estado para diálogo)
+    exit_over_state = {
+        "warehouse_id": None,
+        "items": [],  # [{"code","name","req","avail"}]
+    }
 
     COLOR_CHOICES = [
         ("slate",  ["#0f172a", "#1f2937"]),
@@ -47,6 +54,41 @@ def main(page: ft.Page):
     ]
 
     appbar_text_ref = ft.Ref[ft.Text]()
+
+    # ====== Helper de SnackBars elegantes ======
+    def notify(kind: str, message: str):
+        """
+        kind: 'success' | 'info' | 'warning' | 'error'
+        """
+        kind = (kind or "info").lower()
+        colors = {
+            "success": ft.Colors.GREEN_600,
+            "info": ft.Colors.BLUE_600,
+            "warning": ft.Colors.AMBER_700,
+            "error": ft.Colors.RED_600,
+        }
+        icons = {
+            "success": ft.Icons.CHECK_CIRCLE_ROUNDED,
+            "info": ft.Icons.INFO_ROUNDED,
+            "warning": ft.Icons.WARNING_AMBER_ROUNDED,
+            "error": ft.Icons.ERROR_ROUNDED,
+        }
+        bg = colors.get(kind, ft.Colors.BLUE_600)
+        ic = icons.get(kind, ft.Icons.INFO_ROUNDED)
+
+        sb = ft.SnackBar(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(ic, color=ft.Colors.WHITE, size=22),
+                    ft.Text(message, color=ft.Colors.WHITE, weight=ft.FontWeight.W_600),
+                ],
+                spacing=10,
+                tight=True,
+            ),
+            bgcolor=bg,
+            behavior=ft.SnackBarBehavior.FLOATING,
+        )
+        page.open(sb)
 
     # ===== Control único de diálogos (sin page.dialog) =====
     current_dialog = {"dlg": None}
@@ -67,7 +109,7 @@ def main(page: ft.Page):
     # ======= Paginación =======
     pagination_state = {"page": 0, "per_page": 100, "items": []}
 
-    # ========================== Helpers de productos
+    # ========================== Helpers de stock/productos ==========================
     def fetch_products_for_warehouse(warehouse_id: int | None):
         # Todos
         def _all_products():
@@ -90,7 +132,103 @@ def main(page: ft.Page):
 
         return _all_products(), "Tu DB no expone list_products_by_warehouse; mostrando todos."
 
+    def build_stock_indexes():
+        """
+        Devuelve:
+          totals: {code -> total en todos los almacenes}
+          per_wh: {warehouse_id -> {code -> qty}}
+          wh_names: {warehouse_id -> name}
+        """
+        totals: dict[str, int] = {}
+        per_wh: dict[int, dict[str, int]] = {}
+        wh_names: dict[int, str] = {}
+        try:
+            for w in db.list_warehouses():
+                wid = int(w["id"])
+                wh_names[wid] = w["name"]
+                cmap: dict[str, int] = {}
+                for p in db.list_products_by_warehouse(wid):
+                    code = str(p["code"])
+                    try:
+                        q = int(p.get("qty") or 0)
+                    except:
+                        q = 0
+                    if q < 0:
+                        q = 0
+                    cmap[code] = q
+                    totals[code] = totals.get(code, 0) + q
+                per_wh[wid] = cmap
+        except Exception:
+            pass
+        return totals, per_wh, wh_names
+
+    def open_product_detail(code: str, name: str):
+        """Muestra un Alert con datos del producto y los almacenes donde se encuentra."""
+        # Buscar descripción (si existe)
+        descr = ""
+        try:
+            for p in (db.list_products() or []):
+                if str(p.get("code")) == code:
+                    descr = str(p.get("description") or p.get("descripcion") or "")
+                    break
+        except Exception:
+            descr = ""
+
+        totals, per_wh, wh_names = build_stock_indexes()
+        total = int(totals.get(code, 0))
+        rows = []
+        for wid, cmap in per_wh.items():
+            qty = int(cmap.get(code, 0))
+            if qty > 0:
+                rows.append(
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Text(wh_names.get(wid, "Almacén"), size=12),
+                            ft.Text(str(qty), size=12, weight=ft.FontWeight.W_600),
+                        ],
+                    )
+                )
+        if not rows:
+            rows = [ft.Text("No se encuentra en ningún almacén.", size=12, italic=True, color=ft.Colors.GREY_700)]
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Producto: {code}"),
+            shape=ft.RoundedRectangleBorder(radius=8),
+            content=ft.Column(
+                spacing=8,
+                width=520,
+                height=300,
+                scroll=ft.ScrollMode.AUTO,
+                controls=[
+                    ft.Text(f"Nombre: {name}", size=12),
+                    ft.Text(f"Descripción: {descr or '—'}", size=12),
+                    ft.Divider(),
+                    ft.Text(
+                        f"Total existencias: {total}",
+                        size=12,
+                        weight=ft.FontWeight.W_600,
+                        color=ft.Colors.RED_600 if total == 0 else None,
+                    ),
+                    ft.Text("Almacenes:", size=12, color=ft.Colors.GREY_700),
+                    ft.Column(rows, spacing=6),
+                ],
+            ),
+            actions=[
+                ft.TextButton(
+                    "Cerrar",
+                    on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog()),
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        open_dialog(dlg)
+
     def render_products_list(warehouse_id: int | None = None):
+        # Índices de stock global y por almacén
+        totals, per_wh, wh_names = build_stock_indexes()
+
         items, warn = fetch_products_for_warehouse(warehouse_id)
         if not items and last_import_rows:
             items = last_import_rows
@@ -99,8 +237,30 @@ def main(page: ft.Page):
         for it in items:
             code = str(it.get("code") or it.get("codigo") or it.get("Código") or "")
             name = str(it.get("name") or it.get("nombre") or it.get("Nombre") or "")
-            desc = str(it.get("description") or it.get("descripcion") or it.get("Descripción") or "")
-            norm_items.append({"code": code, "name": name, "description": desc, "qty": it.get("qty")})
+            # Total global
+            total_q = int(totals.get(code, 0))
+            # Qty del almacén actual (si aplica)
+            wh_q = None
+            if warehouse_id is not None:
+                wh_q = int(per_wh.get(int(warehouse_id), {}).get(code, 0))
+            norm_items.append({"code": code, "name": name, "total": total_q, "wh_qty": wh_q})
+        # Si estamos en vista "todos los productos" y items venía desde list_products(),
+        # puede que haya códigos que no aparezcan en 'items' pero sí en totales (por vínculos).
+        # Añadimos faltantes para coherencia visual.
+        if warehouse_id is None:
+            for c, t in totals.items():
+                if not any(x["code"] == c for x in norm_items):
+                    # Intentar obtener nombre desde list_products()
+                    pname = c
+                    try:
+                        for p in (db.list_products() or []):
+                            if str(p.get("code")) == c:
+                                pname = str(p.get("name") or p.get("nombre") or c)
+                                break
+                    except Exception:
+                        pass
+                    norm_items.append({"code": c, "name": pname, "total": int(t or 0), "wh_qty": None})
+
         norm_items.sort(key=lambda x: x["code"])
 
         pagination_state["items"] = norm_items
@@ -123,22 +283,61 @@ def main(page: ft.Page):
             total = len(data)
             start = page_idx * per
             end = min(start + per, total)
+
             rows = []
             for it in data[start:end]:
+                code = it["code"]
+                name = it["name"]
+                total_q = int(it.get("total") or 0)
+                wh_q = it.get("wh_qty")
+
                 cells = [
-                    ft.DataCell(ft.Text(it["code"])),
-                    ft.DataCell(ft.Text(it["name"])),
-                    ft.DataCell(ft.Text(it["description"])),
+                    ft.DataCell(ft.Container(content=ft.Text(code), padding=ft.padding.symmetric(6, 10))),
+                    ft.DataCell(ft.Container(content=ft.Text(name), padding=ft.padding.symmetric(6, 10))),
+                    ft.DataCell(
+                        ft.Container(
+                            content=ft.Text(
+                                str(total_q),
+                                color=ft.Colors.RED_600 if total_q == 0 else None
+                            ),
+                            padding=ft.padding.symmetric(6, 10),
+                        )
+                    ),
                 ]
-                # Si estamos filtrando por almacén y hay qty, muéstrala
                 if warehouse_id is not None:
-                    cells.append(ft.DataCell(ft.Text(str(it.get("qty", 0)))))
-                rows.append(ft.DataRow(cells=cells))
+                    wq = int(wh_q or 0)
+                    cells.append(
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.Text(
+                                    str(wq),
+                                    color=ft.Colors.RED_600 if wq == 0 else None
+                                ),
+                                padding=ft.padding.symmetric(6, 10),
+                            )
+                        )
+                    )
+
+                def on_row_click(e, c=code, n=name):
+                    open_product_detail(c, n)
+                    # opcional: quitar el highlight de selección
+                    try:
+                        e.control.selected = False
+                        page.update()
+                    except:
+                        pass
+
+                rows.append(
+                    ft.DataRow(
+                        cells=cells,
+                        on_select_changed=on_row_click,   # click en toda la fila
+                    )
+                )
 
             columns = [
                 ft.DataColumn(ft.Text("Código")),
                 ft.DataColumn(ft.Text("Nombre")),
-                ft.DataColumn(ft.Text("Descripción")),
+                ft.DataColumn(ft.Text("Total")),
             ]
             if warehouse_id is not None:
                 columns.append(ft.DataColumn(ft.Text("Existencia")))
@@ -149,6 +348,8 @@ def main(page: ft.Page):
                 column_spacing=20,
                 heading_row_height=40,
                 data_row_max_height=56,
+                show_checkbox_column=False,   # sin checkbox, pero la fila es clickeable
+                # ⚠️ quitamos data_row_color para evitar el AttributeError
             )
 
             total_pages = max(1, (total + per - 1) // per)
@@ -174,20 +375,40 @@ def main(page: ft.Page):
 
             return table, page_label, pager
 
+
+
         def render_controls():
             table, page_label, pager = build_table_page()
             header_text = "Productos" + wh_title
+
+            # ----- BOTONES SUPERIORES (derecha) -----
+            top_actions = []
+            if warehouse_id is not None:
+                top_actions = [
+                    ft.FilledTonalButton("← Almacenes", icon=ft.Icons.ARROW_BACK,
+                                         on_click=lambda e: render_warehouses()),
+                    ft.FilledButton("Entrada (escáner)", icon=ft.Icons.QR_CODE,
+                                    on_click=lambda e, wid=warehouse_id: open_entry_for(wid)),
+                    ft.FilledButton("Salida", icon=ft.Icons.EXIT_TO_APP,
+                                    on_click=lambda e, wid=warehouse_id: open_exit_for(wid)),
+                ]
+
+            header_row = ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Text(header_text, size=20, weight=ft.FontWeight.BOLD),
+                    ft.Row(controls=top_actions, spacing=8),
+                ],
+            )
+
             extra = []
             if warn:
                 extra.append(ft.Text(warn, size=11, color=ft.Colors.ORANGE_700))
+
             content_column.controls[:] = [
-                ft.Container(
-                    padding=ft.padding.only(8, 0, 8, 8),
-                    content=ft.Column(
-                        controls=[ft.Text(header_text, size=20, weight=ft.FontWeight.BOLD)] + extra,
-                        spacing=4
-                    ),
-                ),
+                ft.Container(padding=ft.padding.only(8, 0, 8, 8),
+                             content=ft.Column(controls=[header_row] + extra, spacing=6)),
                 ft.Container(padding=ft.padding.only(8, 0, 8, 4), content=page_label),
                 ft.Container(expand=True, padding=ft.padding.all(8), content=ft.ListView(expand=True, controls=[table])),
                 ft.Container(padding=ft.padding.all(8), content=pager),
@@ -278,7 +499,7 @@ def main(page: ft.Page):
                 ft.Text("o haz clic para seleccionar un archivo", size=12, color=ft.Colors.GREY_600),
                 ft.FilledButton("Cargar archivo", icon=ft.Icons.UPLOAD_FILE,
                     on_click=lambda e: file_picker.pick_files(allow_multiple=False, allowed_extensions=["csv","CSV","xlsx","XLSX","xls","XLS"])),
-                ft.Text("Campos requeridos: Código, Nombre, Descripción", size=11, color=ft.Colors.GREY_700),
+                ft.Text("Campos requeridos: Código, Nombre; Descripción y Existencias (opcional)", size=11, color=ft.Colors.GREY_700),
             ],
         )
 
@@ -301,14 +522,14 @@ def main(page: ft.Page):
         name = (name_tf.value or "").strip()
         desc = (descr_tf.value or "").strip()
         if not name:
-            page.open(ft.SnackBar(ft.Text("El nombre es obligatorio."))); return
+            notify("warning", "El nombre es obligatorio."); return
         try:
             db.add_warehouse(name=name, description=desc, color_key=color_dd.value)
-            page.open(ft.SnackBar(ft.Text(f"Almacén '{name}' creado.")))
+            notify("success", f"Almacén '{name}' creado.")
             dlg_create.open = False; page.update(); close_dialog()
             render_warehouses(); page.update()
         except Exception as ex:
-            page.open(ft.SnackBar(ft.Text(f"Error: {ex}")))
+            notify("error", f"Error: {ex}")
 
     # ==== Handlers de menú ====
     def handle_submenu_open(e: ft.ControlEvent): pass
@@ -331,7 +552,7 @@ def main(page: ft.Page):
             ui_state["last_warehouse_id"] = None
             render_products_list(None)
         else:
-            page.open(ft.SnackBar(content=ft.Text(f"{label} was clicked!")))
+            notify("info", f"{label} was clicked!")
 
         if appbar_text_ref.current:
             appbar_text_ref.current.value = label
@@ -339,6 +560,15 @@ def main(page: ft.Page):
 
     # ======= Helpers de importación / duplicados =========
     def _normalize(s: str) -> str: return (s or "").strip()
+
+    def _to_int_safe(v) -> int:
+        try:
+            s = str(v).strip()
+            if s == "" or s.lower() in ("none", "nan", "null"):
+                return 0
+            return int(float(s.replace(",", "")))
+        except:
+            return 0
 
     def _existing_codes_set():
         codes = set()
@@ -356,16 +586,17 @@ def main(page: ft.Page):
             for a,b in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u")]: h = h.replace(a,b)
             return h
         norm = [_norm(h) for h in headers]
-        def find(*c): 
+        def find(*c):
             for k in c:
                 if k in norm: return norm.index(k)
             return -1
         i_code = find("codigo","código","code","sku","clave")
         i_name = find("nombre","name","producto")
         i_desc = find("descripcion","descripción","description","detalle")
+        i_qty  = find("existencia","existencias","qty","cantidad","stock","inventario","exist")
         if i_code < 0 or i_name < 0:
-            raise ValueError("Encabezados requeridos: Código y Nombre (Descripción opcional).")
-        return i_code, i_name, i_desc
+            raise ValueError("Encabezados requeridos: Código y Nombre (Descripción y Existencias opcionales).")
+        return i_code, i_name, i_desc, i_qty
 
     def parse_products_from_file(file_meta) -> list[dict]:
         path = file_meta.path
@@ -378,14 +609,15 @@ def main(page: ft.Page):
             with open(path, "r", encoding="utf-8-sig", newline="") as f:
                 dr = csv.reader(f); headers = next(dr, None)
                 if not headers: raise ValueError("El CSV no contiene encabezados.")
-                i_code, i_name, i_desc = _map_headers(headers)
+                i_code, i_name, i_desc, i_qty = _map_headers(headers)
                 for r in dr:
                     if not r or len(r) <= max(i_code, i_name): continue
                     code = _normalize(r[i_code] if i_code >=0 and i_code < len(r) else "")
                     name = _normalize(r[i_name] if i_name >=0 and i_name < len(r) else "")
                     desc = _normalize(r[i_desc] if i_desc >=0 and i_desc < len(r) else "")
+                    qty  = _to_int_safe(r[i_qty]) if (i_qty >= 0 and i_qty < len(r)) else 0
                     if not (code and name): continue
-                    rows.append({"code": code, "name": name, "description": desc})
+                    rows.append({"code": code, "name": name, "description": desc, "qty": qty})
         elif ext in (".xlsx", ".xls"):
             try:
                 from openpyxl import load_workbook
@@ -395,15 +627,16 @@ def main(page: ft.Page):
             ws = wb.active
             header_cells = next(ws.iter_rows(min_row=1, max_row=1))
             headers = [("" if c.value is None else str(c.value)) for c in header_cells]
-            i_code, i_name, i_desc = _map_headers(headers)
+            i_code, i_name, i_desc, i_qty = _map_headers(headers)
             for row in ws.iter_rows(min_row=2):
                 vals = [("" if c.value is None else str(c.value)) for c in row]
                 if not vals or len(vals) <= max(i_code, i_name): continue
                 code = _normalize(vals[i_code] if i_code >=0 and i_code < len(vals) else "")
                 name = _normalize(vals[i_name] if i_name >=0 and i_name < len(vals) else "")
                 desc = _normalize(vals[i_desc] if i_desc >=0 and i_desc < len(vals) else "")
+                qty  = _to_int_safe(vals[i_qty]) if (i_qty >= 0 and i_qty < len(vals)) else 0
                 if not (code and name): continue
-                rows.append({"code": code, "name": name, "description": desc})
+                rows.append({"code": code, "name": name, "description": desc, "qty": qty})
         else:
             raise ValueError("Formato no soportado. Usa CSV o Excel (.xlsx/.xls).")
 
@@ -412,9 +645,15 @@ def main(page: ft.Page):
         return rows
 
     # ======= Importación con selección de almacén =====
-    def import_rows_with_progress(rows: list[dict], warehouse_id: int):
+    def import_rows_with_progress(rows: list[dict], warehouse_id: int, replace_mode: bool = False):
         existing = _existing_codes_set()
-        preprocessed = [{"code": _normalize(r["code"]), "name": _normalize(r["name"]), "description": _normalize(r.get("description",""))} for r in rows]
+        preprocessed = [{
+            "code": _normalize(r["code"]),
+            "name": _normalize(r["name"]),
+            "description": _normalize(r.get("description","")),
+            "qty": int(r.get("qty") or 0)
+        } for r in rows]
+
         total = len(preprocessed)
         prog = ft.ProgressBar(value=0, width=400)
         lbl  = ft.Text(f"0 / {total} productos", size=12)
@@ -429,46 +668,93 @@ def main(page: ft.Page):
         )
         open_dialog(dlg_prog)
 
+        # Cache de existencias actuales del almacén (para fallback de reemplazo)
+        current_stock = {}
+        try:
+            for p in db.list_products_by_warehouse(warehouse_id):
+                current_stock[str(p["code"])] = int(p.get("qty") or 0)
+        except Exception:
+            current_stock = {}
+
         def _link_to_warehouse(code: str, wid: int):
-            if hasattr(db, "is_product_linked"):
-                try:
-                    if db.is_product_linked(code, wid): return
-                except Exception: pass
+            try:
+                if hasattr(db, "is_product_linked") and db.is_product_linked(code, wid):
+                    return
+            except Exception:
+                pass
             if hasattr(db, "link_product_to_warehouse"):
-                db.link_product_to_warehouse(code, wid); return
-            db.upsert_product(code=code, name=None, description=None, warehouse_id=wid)
+                db.link_product_to_warehouse(code, wid)
+            else:
+                db.upsert_product(code=code, name=None, description=None, warehouse_id=wid)
+
+        def _set_or_add_stock(code: str, wid: int, qty: int):
+            if qty <= 0:
+                return
+            if replace_mode:
+                # 1) Si existe set_stock(), úsalo
+                if hasattr(db, "set_stock"):
+                    try:
+                        db.set_stock(code, wid, qty, note="Importación (reemplazo)")
+                        # actualizar cache
+                        current_stock[code] = qty
+                        return
+                    except Exception:
+                        pass
+                # 2) Fallback: calcula delta y aplica increment/decrement
+                prev = current_stock.get(code, 0)
+                delta = qty - prev
+                if delta > 0:
+                    db.increment_stock(code, wid, delta, note="Importación (ajuste a reemplazo +)")
+                elif delta < 0:
+                    db.decrement_stock(code, wid, -delta, note="Importación (ajuste a reemplazo -)")
+                current_stock[code] = qty
+            else:
+                # Sumar
+                db.increment_stock(code, wid, qty, note="Importación (suma)")
 
         def worker():
-            ok = dup = link_ok = err = 0
+            ok = link_ok = err = 0
             for i, r in enumerate(preprocessed, start=1):
                 try:
                     code_key = r["code"]
+                    # Alta/actualización del catálogo base
                     if code_key not in existing:
-                        db.upsert_product(code=r["code"], name=r["name"], description=r.get("description",""), warehouse_id=None)
-                        existing.add(code_key); ok += 1
+                        db.upsert_product(
+                            code=r["code"], name=r["name"], description=r.get("description",""), warehouse_id=None
+                        )
+                        existing.add(code_key)
+                        ok += 1
+
+                    # Vincular al almacén
                     _link_to_warehouse(code_key, warehouse_id); link_ok += 1
+
+                    # Aplicar existencias si vienen en archivo
+                    _set_or_add_stock(code_key, warehouse_id, int(r.get("qty") or 0))
+
                 except Exception:
                     err += 1
-                prog.value = i / total; lbl.value = f"{i} / {total} productos"; page.update()
+
+                prog.value = i / total
+                lbl.value = f"{i} / {total} productos"
+                page.update()
 
             dlg_prog.open = False; page.update(); close_dialog()
-            msg = f"Importación: {ok} nuevos"
-            if dup: msg += f", {dup} ya existían"
-            if link_ok: msg += f", {link_ok} asociados"
+            modo = "reemplazo" if replace_mode else "suma"
+            msg = f"Importación ({modo}) completada: {ok} nuevos, {link_ok} asociados"
             if err: msg += f", {err} con error"
-            page.open(ft.SnackBar(ft.Text(msg)))
+            notify("success", msg)
             render_products_list(warehouse_id)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def process_selected_file_with_warehouse(file_meta, warehouse_id: int):
+    def process_selected_file_with_warehouse(file_meta, warehouse_id: int, replace_mode: bool = False):
         try:
             rows = parse_products_from_file(file_meta)
         except ImportError as ie:
-            page.open(ft.SnackBar(ft.Text(str(ie)))); return
+            notify("error", str(ie)); return
         except Exception as ex:
-            page.open(ft.SnackBar(ft.Text(f"Error al leer archivo: {ex}"))); return
-        import_rows_with_progress(rows, warehouse_id)
+            notify("error", f"Error al leer archivo: {ex}"); return
+        import_rows_with_progress(rows, warehouse_id, replace_mode)
 
     # ---------- FilePicker ----------
     def on_file_picked(e: ft.FilePickerResultEvent):
@@ -486,6 +772,7 @@ def main(page: ft.Page):
         wh_dd.options = wh_options
         wh_dd.value = wh_options[0].key if wh_options else None
         ui_state["selected_wh_id"] = int(wh_dd.value) if wh_dd.value else None
+        replace_stock_cb.value = bool(ui_state.get("replace_stock", False))
         open_dialog(dlg_pick_wh)
 
     def on_pick_wh_changed(e):
@@ -494,9 +781,13 @@ def main(page: ft.Page):
 
     def on_pick_wh_confirm(e):
         if ui_state["pending_file"] is None or ui_state["selected_wh_id"] is None:
-            page.open(ft.SnackBar(ft.Text("Selecciona un almacén válido."))); return
+            notify("warning", "Selecciona un almacén válido."); return
         dlg_pick_wh.open = False; page.update(); close_dialog()
-        process_selected_file_with_warehouse(ui_state["pending_file"], ui_state["selected_wh_id"])
+        process_selected_file_with_warehouse(
+            ui_state["pending_file"],
+            ui_state["selected_wh_id"],
+            replace_mode=bool(ui_state.get("replace_stock", False)),
+        )
         ui_state["pending_file"] = None
 
     def on_pick_wh_cancel(e):
@@ -514,6 +805,21 @@ def main(page: ft.Page):
     )
     entry_lines_col = ft.Column(spacing=8, width=520, tight=True, scroll=ft.ScrollMode.ADAPTIVE)
 
+    # ====== Helpers de foco ======
+    def focus_entry_field():
+        try:
+            entry_code_tf.focus()
+        except Exception:
+            pass
+        page.update()
+
+    def focus_exit_field():
+        try:
+            exit_code_tf.focus()
+        except Exception:
+            pass
+        page.update()
+
     def _entry_refresh_warehouse_options():
         ws = db.list_warehouses()
         entry_wh_dd.options = [ft.dropdown.Option(str(w["id"]), text=w["name"]) for w in ws]
@@ -528,15 +834,32 @@ def main(page: ft.Page):
         entry_state["warehouse_id"] = int(entry_wh_dd.value) if entry_wh_dd.value else None
         entry_state["lines"].clear()
         entry_render_lines()
+        focus_entry_field()
 
     entry_wh_dd.on_change = entry_on_wh_change
+
+    # --- NUEVO: confirmar cantidad con Enter (entrada) ---
+    def entry_qty_submit(code: str, val: str):
+        try:
+            n = int(val)
+            n = 1 if n <= 0 else n
+        except:
+            n = 1
+        if code in entry_state["lines"]:
+            entry_state["lines"][code]["qty"] = n
+        # Regresar foco SOLO cuando confirma con Enter
+        focus_entry_field()
 
     def entry_render_lines():
         rows = []
         for code, data in entry_state["lines"].items():
             qty_tf = ft.TextField(
-                value=str(data["qty"]), width=70, text_align=ft.TextAlign.RIGHT,
+                value=str(data["qty"]),
+                width=70,
+                text_align=ft.TextAlign.RIGHT,
                 on_change=lambda e, _c=code: entry_update_qty(_c, e.control.value),
+                on_submit=lambda e, _c=code: entry_qty_submit(_c, e.control.value),
+                keyboard_type=ft.KeyboardType.NUMBER,
             )
             rows.append(
                 ft.Row(
@@ -553,31 +876,35 @@ def main(page: ft.Page):
         except: n = 1
         if code in entry_state["lines"]:
             entry_state["lines"][code]["qty"] = n
+        # NO mover el foco aquí
 
     def entry_add_code(raw_code: str):
         code = (raw_code or "").strip()
-        entry_code_tf.value = ""; page.update()
-        if not code: return
+        entry_code_tf.value = ""
+        page.update()
+        if not code:
+            focus_entry_field(); return
         wid = entry_state["warehouse_id"]
         if not wid:
-            page.open(ft.SnackBar(ft.Text("Selecciona un almacén."))); return
+            notify("warning", "Selecciona un almacén."); focus_entry_field(); return
         try:
             prods = db.list_products_by_warehouse(wid)
             mp = {p["code"]: p for p in prods}
             if code not in mp:
-                page.open(ft.SnackBar(ft.Text("El código no pertenece a este almacén."))); return
+                notify("warning", "El código no pertenece a este almacén."); focus_entry_field(); return
             name = mp[code]["name"]
         except Exception as ex:
-            page.open(ft.SnackBar(ft.Text(f"No se pudo validar producto: {ex}"))); return
+            notify("error", f"No se pudo validar producto: {ex}"); focus_entry_field(); return
 
         entry_state["lines"].setdefault(code, {"name": name, "qty": 0})
         entry_state["lines"][code]["qty"] += 1
         entry_render_lines()
+        focus_entry_field()
 
     def entry_confirm(e):
         wid = entry_state["warehouse_id"]
         if not wid or not entry_state["lines"]:
-            page.open(ft.SnackBar(ft.Text("No hay productos que registrar."))); return
+            notify("warning", "No hay productos que registrar."); focus_entry_field(); return
         total_items = 0
         for code, data in entry_state["lines"].items():
             qty = int(data["qty"] or 0)
@@ -585,25 +912,21 @@ def main(page: ft.Page):
                 db.increment_stock(code, wid, qty, note="Entrada manual")
                 total_items += qty
 
-        # Cierra el diálogo
         dlg_entry.open = False
         page.update()
         close_dialog()
 
-        # 🔄 Refresca la vista de productos si estás viendo ese almacén
         if ui_state.get("last_warehouse_id") == wid:
-            render_products_list(wid)   # vuelve a consultar qty y actualiza la tabla
+            render_products_list(wid)
             page.update()
 
-        # Feedback y limpieza
-        page.open(ft.SnackBar(ft.Text(
-            f"Entrada registrada: {len(entry_state['lines'])} productos, {total_items} unidades."
-        )))
+        notify("success", f"Entrada registrada: {len(entry_state['lines'])} productos, {total_items} unidades.")
         entry_state["lines"].clear()
 
     def entry_clear(e):
         entry_state["lines"].clear()
         entry_render_lines()
+        focus_entry_field()
 
     def open_entry_dialog():
         if not db.list_warehouses():
@@ -612,18 +935,52 @@ def main(page: ft.Page):
         entry_state["lines"].clear()
         entry_render_lines()
         page.open(dlg_entry)
+        focus_entry_field()
 
+    # ===== Helpers: abrir entrada/salida con almacén preseleccionado =====
+    def open_entry_for(warehouse_id: int):
+        if not db.list_warehouses():
+            open_dialog(alert_no_wh); return
+        _entry_refresh_warehouse_options()
+        opts = {opt.key for opt in (entry_wh_dd.options or [])}
+        if str(warehouse_id) in opts:
+            entry_wh_dd.value = str(warehouse_id)
+            entry_state["warehouse_id"] = warehouse_id
+        else:
+            entry_state["warehouse_id"] = int(entry_wh_dd.value) if entry_wh_dd.value else None
+        entry_state["lines"].clear()
+        entry_render_lines()
+        page.open(dlg_entry)
+        focus_entry_field()
+
+    # -------- SALIDA DE PRODUCTOS (alert) --------
     def exit_on_wh_change(e):
         exit_state["warehouse_id"] = int(exit_wh_dd.value) if exit_wh_dd.value else None
         exit_render_lines()
+        # NO mover el foco aquí para no interrumpir edición
+
+    # --- NUEVO: confirmar cantidad con Enter (salida) ---
+    def exit_qty_submit(code: str, val: str):
+        try:
+            n = int(val)
+            n = 1 if n <= 0 else n
+        except:
+            n = 1
+        if code in exit_state["lines"]:
+            exit_state["lines"][code]["qty"] = n
+        # Regresar foco SOLO cuando confirma con Enter
+        focus_exit_field()
 
     def exit_render_lines():
-        print(exit_state["lines"])
         rows = []
         for code, data in exit_state["lines"].items():
             qty_tf = ft.TextField(
-                value=str(data["qty"]), width=70, text_align=ft.TextAlign.RIGHT,
+                value=str(data["qty"]),
+                width=70,
+                text_align=ft.TextAlign.RIGHT,
                 on_change=lambda e, _c=code: exit_update_qty(_c, e.control.value),
+                on_submit=lambda e, _c=code: exit_qty_submit(_c, e.control.value),
+                keyboard_type=ft.KeyboardType.NUMBER,
             )
             rows.append(
                 ft.Row(
@@ -631,73 +988,101 @@ def main(page: ft.Page):
                     controls=[ft.Text(f"{code} – {data['name']}", size=13), ft.Row(controls=[ft.Text("Cant."), qty_tf])],
                 )
             )
-
-        # Solo actualiza los controles sin borrar los previos
         exit_lines_col.controls[:] = rows
         page.update()
-
 
     def exit_update_qty(code: str, val: str):
         try:
             n = int(val)
-            n = 1 if n <= 0 else n  # Asegura que la cantidad sea mayor que 0
+            n = 1 if n <= 0 else n
         except:
-            n = 1  # Si la conversión falla, por defecto se asigna cantidad 1
-
+            n = 1
         if code in exit_state["lines"]:
             exit_state["lines"][code]["qty"] = n
+        # IMPORTANTE: NO re-render ni foco aquí para no romper edición
 
-        exit_render_lines()  # Actualiza la vista
-
-
-    def exit_add_code(raw_code: str):
-        code = (raw_code or "").strip()
-        exit_code_tf.value = ""  # Limpiar el campo de código para seguir escaneando
-        page.update()  # Actualizar la página
-
-        if not code:
-            return
-
-        # Verificar el almacén seleccionado
-        wid = exit_state["warehouse_id"]
-        if not wid:
-            page.open(ft.SnackBar(ft.Text("Selecciona un almacén.")))
-            return
-
+    # ====== Helpers de stock ======
+    def get_stock_map(warehouse_id: int) -> dict:
+        """Devuelve {code: qty>=0} del almacén."""
+        mp = {}
         try:
-            # Obtener los productos del almacén
-            prods = db.list_products_by_warehouse(wid)
-            mp = {p["code"]: p for p in prods}
+            for p in db.list_products_by_warehouse(warehouse_id):
+                try:
+                    q = int(p.get("qty") or 0)
+                except:
+                    q = 0
+                if q < 0:
+                    q = 0
+                mp[str(p["code"])] = q
+        except Exception:
+            mp = {}
+        return mp
 
-            # Verificar si el código escaneado pertenece al almacén
-            if code not in mp:
-                page.open(ft.SnackBar(ft.Text("El código no pertenece a este almacén.")))
-                return
+    # ====== Diálogo de sobre-extracción ======
+    exit_over_list_col = ft.Column(spacing=8, tight=True, width=520, height=220, scroll=ft.ScrollMode.AUTO)
 
-            name = mp[code]["name"]
-        except Exception as ex:
-            page.open(ft.SnackBar(ft.Text(f"No se pudo validar producto: {ex}")))
-            return
+    def apply_exit_caps_and_perform(e):
+        """Ajusta cantidades a máximos y realiza la salida."""
+        wid = exit_over_state.get("warehouse_id")
+        for it in exit_over_state.get("items", []):
+            code = it["code"]
+            avail = int(it["avail"] or 0)
+            if code in exit_state["lines"]:
+                exit_state["lines"][code]["qty"] = avail  # cap
+        dlg_exit_over.open = False
+        page.update()
+        close_dialog()
+        perform_exit(wid)
 
-        # Si el código ya está en la lista de productos, incrementa la cantidad
-        if code in exit_state["lines"]:
-            exit_state["lines"][code]["qty"] += 1
-        else:
-            # Si el código no está, añádelo con cantidad 1
-            exit_state["lines"][code] = {"name": name, "qty": 1}
+    dlg_exit_over = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Cantidad solicitada supera la existencia"),
+        content=ft.Column(
+            controls=[
+                ft.Text("Se encontraron productos con cantidad solicitada mayor que la existencia. ¿Deseas extraer la cantidad máxima disponible?", size=12),
+                ft.Divider(),
+                exit_over_list_col,
+            ],
+            spacing=8,
+            width=560,
+            height=320,
+            scroll=ft.ScrollMode.AUTO,
+        ),
+        actions=[
+            ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg_exit_over, "open", False), page.update(), close_dialog())),
+            ft.FilledButton("Usar máximos y continuar", on_click=apply_exit_caps_and_perform),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+        shape=ft.RoundedRectangleBorder(radius=5),
+    )
 
-        # Actualiza la vista de productos en el alert
-        exit_render_lines()  # Llama a la función para renderizar los productos en el dialog
+    def show_exit_over_dialog(over_items: list[dict], wid: int):
+        """Rellena y muestra el diálogo de sobre-extracción."""
+        exit_over_state["items"] = over_items
+        exit_over_state["warehouse_id"] = wid
+        # Construir lista
+        rows = []
+        for it in over_items:
+            rows.append(
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Text(f"{it['code']} – {it['name']}", size=12),
+                        ft.Text(f"Solicitado: {it['req']} • Máx: {it['avail']}", size=12, weight=ft.FontWeight.W_600),
+                    ]
+                )
+            )
+        exit_over_list_col.controls = rows
+        open_dialog(dlg_exit_over)
 
+    # ====== Flujo de salida ======
+    def perform_exit(wid: int | None):
+        """Aplica la salida (ya validada/capeada) y da feedback."""
+        if not wid:
+            notify("warning", "Selecciona un almacén."); focus_exit_field(); return
+        if not exit_state["lines"]:
+            notify("warning", "No hay productos que registrar."); focus_exit_field(); return
 
-
-
-
-
-    def exit_confirm(e):
-        wid = exit_state["warehouse_id"]
-        if not wid or not exit_state["lines"]:
-            page.open(ft.SnackBar(ft.Text("No hay productos que registrar."))); return
         total_items = 0
         for code, data in exit_state["lines"].items():
             qty = int(data["qty"] or 0)
@@ -705,25 +1090,81 @@ def main(page: ft.Page):
                 db.decrement_stock(code, wid, qty, note="Salida manual")
                 total_items += qty
 
-        # Cierra el diálogo
-        dlg_exit.open = False
+        # Cierra el diálogo principal si aún estuviera abierto
+        try:
+            dlg_exit.open = False
+        except:
+            pass
         page.update()
         close_dialog()
 
-        # 🔄 Refresca la vista de productos si estás viendo ese almacén
+        # Refresca la vista si corresponde
         if ui_state.get("last_warehouse_id") == wid:
-            render_products_list(wid)   # vuelve a consultar qty y actualiza la tabla
+            render_products_list(wid)
             page.update()
 
-        # Feedback y limpieza
-        page.open(ft.SnackBar(ft.Text(
-            f"Salida registrada: {len(exit_state['lines'])} productos, {total_items} unidades."
-        )))
+        notify("success", f"Salida registrada: {len(exit_state['lines'])} productos, {total_items} unidades.")
         exit_state["lines"].clear()
+
+    def exit_add_code(raw_code: str):
+        code = (raw_code or "").strip()
+        exit_code_tf.value = ""
+        page.update()
+
+        if not code:
+            focus_exit_field(); return
+
+        wid = exit_state["warehouse_id"]
+        if not wid:
+            notify("warning", "Selecciona un almacén.")
+            focus_exit_field(); return
+
+        try:
+            prods = db.list_products_by_warehouse(wid)
+            mp = {p["code"]: p for p in prods}
+            if code not in mp:
+                notify("warning", "El código no pertenece a este almacén.")
+                focus_exit_field(); return
+            name = mp[code]["name"]
+        except Exception as ex:
+            notify("error", f"No se pudo validar producto: {ex}")
+            focus_exit_field(); return
+
+        if code in exit_state["lines"]:
+            exit_state["lines"][code]["qty"] += 1
+        else:
+            exit_state["lines"][code] = {"name": name, "qty": 1}
+
+        exit_render_lines()
+        focus_exit_field()
+
+    def exit_confirm(e):
+        wid = exit_state["warehouse_id"]
+        if not wid or not exit_state["lines"]:
+            notify("warning", "No hay productos que registrar."); focus_exit_field(); return
+
+        # Validar contra existencias actuales
+        stock = get_stock_map(wid)
+        over = []
+        for code, data in exit_state["lines"].items():
+            req = int(data.get("qty") or 0)
+            avail = int(stock.get(code, 0))
+            if req > avail:
+                over.append({"code": code, "name": data.get("name",""), "req": req, "avail": avail})
+
+        if over:
+            # SnackBar y diálogo de confirmación de máximos
+            notify("error", "No se puede extraer más productos que los que están en existencia.")
+            show_exit_over_dialog(over, wid)
+            return
+
+        # Si no hay sobre-extracción, procesar normalmente
+        perform_exit(wid)
 
     def exit_clear(e):
         exit_state["lines"].clear()
         exit_render_lines()
+        focus_exit_field()
 
     def _exit_refresh_warehouse_options():
         ws = db.list_warehouses()
@@ -735,17 +1176,29 @@ def main(page: ft.Page):
             exit_wh_dd.value = None
             exit_state["warehouse_id"] = None
 
-    def open_exit_dialog(e):  # Añadir 'e' para aceptar el evento
+    def open_exit_dialog(e):
         if not db.list_warehouses():
             open_dialog(alert_no_wh); return
         _exit_refresh_warehouse_options()
         exit_state["lines"].clear()
         exit_render_lines()
         page.open(dlg_exit)
+        focus_exit_field()
 
-
-
-    
+    def open_exit_for(warehouse_id: int):
+        if not db.list_warehouses():
+            open_dialog(alert_no_wh); return
+        _exit_refresh_warehouse_options()
+        opts = {opt.key for opt in (exit_wh_dd.options or [])}
+        if str(warehouse_id) in opts:
+            exit_wh_dd.value = str(warehouse_id)
+            exit_state["warehouse_id"] = warehouse_id
+        else:
+            exit_state["warehouse_id"] = int(exit_wh_dd.value) if exit_wh_dd.value else None
+        exit_state["lines"].clear()
+        exit_render_lines()
+        page.open(dlg_exit)
+        focus_exit_field()
 
     # ---------- UI base / common ----------
     file_picker = ft.FilePicker(on_result=on_file_picked)
@@ -817,10 +1270,15 @@ def main(page: ft.Page):
 
     # Diálogo para elegir almacén al importar
     wh_dd = ft.Dropdown(label="Selecciona un almacén", width=360, on_change=on_pick_wh_changed)
+    replace_stock_cb = ft.Checkbox(
+        label="Reemplazar existencias en el almacén (no sumar)",
+        value=False,
+        on_change=lambda e: ui_state.__setitem__("replace_stock", bool(e.control.value)),
+    )
     dlg_pick_wh = ft.AlertDialog(
         modal=True,
         title=ft.Text("¿A qué almacén se agregarán estos productos?"),
-        content=ft.Column([wh_dd], spacing=10, width=380, tight=True),
+        content=ft.Column([wh_dd, replace_stock_cb], spacing=10, width=380, tight=True),
         actions=[ft.TextButton("Cancelar", on_click=on_pick_wh_cancel), ft.FilledButton("Confirmar", on_click=on_pick_wh_confirm)],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -866,9 +1324,9 @@ def main(page: ft.Page):
     def do_delete_warehouse():
         try:
             db.delete_warehouse_cascade(warehouse_to_delete["id"])
-            page.open(ft.SnackBar(ft.Text(f"Almacén '{warehouse_to_delete['name']}' eliminado.")))
+            notify("success", f"Almacén '{warehouse_to_delete['name']}' eliminado.")
         except Exception as ex:
-            page.open(ft.SnackBar(ft.Text(f"Error: {ex}")))
+            notify("error", f"Error: {ex}")
         finally:
             dlg_delete.open = False; page.update(); close_dialog(); render_warehouses()
 
@@ -881,81 +1339,58 @@ def main(page: ft.Page):
         ),
         controls=[
             ft.SubmenuButton(
-                content=ft.Text("Inicio"),
-                on_open=handle_submenu_open, on_close=handle_submenu_close,
-                controls=[
-                    ft.MenuItemButton(content=ft.Text("Dashboard"), leading=ft.Icon(ft.Icons.DASHBOARD),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
-                ],
-            ),
-            ft.SubmenuButton(
                 content=ft.Text("Almacén"),
                 on_open=handle_submenu_open, on_close=handle_submenu_close,
                 controls=[
                     ft.MenuItemButton(content=ft.Text("Ver almacenes"), leading=ft.Icon(ft.Icons.INVENTORY),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
+                                    style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
+                                                        shape=ft.RoundedRectangleBorder(radius=0)),
+                                    on_click=handle_menu_item_click),
                     ft.MenuItemButton(content=ft.Text("Crear un almacen"), leading=ft.Icon(ft.Icons.WAREHOUSE),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
+                                    style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
+                                                        shape=ft.RoundedRectangleBorder(radius=0)),
+                                    on_click=handle_menu_item_click),
                     ft.MenuItemButton(content=ft.Text("Entrada de productos"), leading=ft.Icon(ft.Icons.QR_CODE),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
+                                    style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
+                                                        shape=ft.RoundedRectangleBorder(radius=0)),
+                                    on_click=handle_menu_item_click),
                     ft.MenuItemButton(content=ft.Text("Salida de productos"), leading=ft.Icon(ft.Icons.EXIT_TO_APP),
-                                  style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                       shape=ft.RoundedRectangleBorder(radius=0)),
-                                  on_click=open_exit_dialog),
-                    ft.MenuItemButton(content=ft.Text("Importar lista de almacenes"), leading=ft.Icon(ft.Icons.LIST_ALT),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
+                                style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
+                                                    shape=ft.RoundedRectangleBorder(radius=0)),
+                                on_click=open_exit_dialog),
                 ],
             ),
+
             ft.SubmenuButton(
                 content=ft.Text("Productos"),
                 on_open=handle_submenu_open, on_close=handle_submenu_close,
                 controls=[
-                    ft.MenuItemButton(content=ft.Text("Ver productos"), data="products_view", leading=ft.Icon(ft.Icons.INVENTORY_SHARP),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
-                    ft.MenuItemButton(content=ft.Text("Agregar Lista de Productos"), data="products_import", leading=ft.Icon(ft.Icons.FILE_OPEN),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
-                ],
-            ),
-            ft.SubmenuButton(
-                content=ft.Text("Operadores"),
-                on_open=handle_submenu_open, on_close=handle_submenu_close,
-                controls=[
-                    ft.MenuItemButton(content=ft.Text("Ver operadores"), leading=ft.Icon(ft.Icons.PERSON),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
-                    ft.MenuItemButton(content=ft.Text("Agregar operador"), leading=ft.Icon(ft.Icons.PERSON_4_SHARP),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
+                    ft.MenuItemButton(content=ft.Text("Ver productos"), data="products_view",
+                                    leading=ft.Icon(ft.Icons.INVENTORY_SHARP),
+                                    style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
+                                                        shape=ft.RoundedRectangleBorder(radius=0)),
+                                    on_click=handle_menu_item_click),
+                    ft.MenuItemButton(content=ft.Text("Agregar Lista de Productos"), data="products_import",
+                                    leading=ft.Icon(ft.Icons.FILE_OPEN),
+                                    style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
+                                                        shape=ft.RoundedRectangleBorder(radius=0)),
+                                    on_click=handle_menu_item_click),
                 ],
             ),
             ft.SubmenuButton(
                 content=ft.Text("Buscar"),
                 on_open=handle_submenu_open, on_close=handle_submenu_close,
                 controls=[
-                    ft.MenuItemButton(content=ft.Text("Buscar un producto"), leading=ft.Icon(ft.Icons.SEARCH),
-                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-                                                           shape=ft.RoundedRectangleBorder(radius=0)),
-                                      on_click=handle_menu_item_click),
+                    ft.MenuItemButton(content=ft.Text("Buscar un producto"),
+                                    leading=ft.Icon(ft.Icons.SEARCH),
+                                    style=ft.ButtonStyle(bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
+                                                        shape=ft.RoundedRectangleBorder(radius=0)),
+                                    on_click=handle_menu_item_click),
                 ],
             ),
         ],
     )
+
 
     top_bar = ft.Container(content=menubar, padding=0, left=0, right=0, top=0)
 
