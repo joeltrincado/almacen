@@ -5,7 +5,7 @@ description = "Aplicacion para el control de entradas y salidas de prodcutos"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
-    { name = "Joel Trincado", email = "joel@tectronic.mx" }
+    { name = "Joel Trincado", email = "joeltrincadov@gmail.com" }
 ]
 dependencies = [
     "flet==0.28.2",    # Flet para la interfaz de usuario
@@ -14,10 +14,10 @@ dependencies = [
 ]
 
 [tool.flet]
-org = "tectronic.mx"    # Nombre de la organización en notación de dominio invertido
+org = "cherrydevs.com"    # Nombre de la organización en notación de dominio invertido
 product = "Control de almacen"  # Nombre de la app para Android/iOS
-company = "Corporacion Tectronic"      # Nombre de la empresa
-copyright = "Copyright (C) 2025 by Corporacion Tectronic"  # Información de copyright
+company = "Cherry Devs"      # Nombre de la empresa
+copyright = "Copyright (C) 2025 by Cherry Devs"  # Información de copyright
 compile.app = true # --compile-app
 compile.packages = true # --compile-packages
 compile.cleanup = true # --cleanup-on-compile

@@ -302,3 +302,9 @@ def search_filter_and_score(
             scored.append((sc, it))
     scored.sort(key=lambda x: (x[0], x[1]["name"]))
     return [it for _, it in scored]
+
+
+def now_timestamp_compact():
+    # YYYYMMDD_HHMMSS
+    from datetime import datetime
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
