@@ -27,7 +27,7 @@ path = "src"  # Ruta del directorio donde se encuentra el código fuente
 
 [tool.flet.app.boot_screen]
 show = true
-message = "Cargando..."
+message = "Iniciando Control de Almacen"
 
 [tool.flet.splash]
 color = "#FFFF00" # --splash-color
@@ -40,7 +40,7 @@ android = true # --android-splash
 show = true
 color = "#FFFF00"
 dark_color = "#8B8000"
-message = "Iniciando CodeAl"
+message = "Iniciando Control de Almacen"
 
 [tool.uv]
 dev-dependencies = [

@@ -2681,7 +2681,7 @@ def main(page: ft.Page):
             content=ft.Text("Almacén"),
             controls=[
                 cmp.menu_item("Ver almacenes", ft.Icons.INVENTORY, handle_menu_item_click, data="warehouses_view"),
-                cmp.menu_item("Crear un almacen", ft.Icons.WAREHOUSE, handle_menu_item_click, data="warehouse_new"),
+                cmp.menu_item("Crear un almacen", ft.Icons.WAREHOUSE, handle_menu_item_click, data="warehouse_new", disabled=True),
                 cmp.menu_item("Transferir stock", ft.Icons.SWAP_HORIZ, lambda e: open_transfer_dialog()),
                 cmp.menu_item("Entrada de productos", ft.Icons.QR_CODE, lambda e: open_entry_dialog()),
                 cmp.menu_item("Salida de productos", ft.Icons.EXIT_TO_APP, lambda e: open_exit_dialog()),
@@ -2695,8 +2695,8 @@ def main(page: ft.Page):
             content=ft.Text("Productos"),
             controls=[
                 cmp.menu_item("Ver productos", ft.Icons.INVENTORY_SHARP, handle_menu_item_click, data="products_view"),
-                cmp.menu_item("Agregar Lista de Productos", ft.Icons.FILE_OPEN, handle_menu_item_click, data="products_import"),
-                cmp.menu_item("Categorías y unidades", ft.Icons.CATEGORY, lambda e: render_categories_units_page()),
+                cmp.menu_item("Agregar Lista de Productos", ft.Icons.FILE_OPEN, handle_menu_item_click, data="products_import", disabled=True),
+                cmp.menu_item("Categorías y unidades", ft.Icons.CATEGORY, lambda e: render_categories_units_page(), disabled=True),
 
             ],
         ),
