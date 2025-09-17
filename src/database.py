@@ -1,39 +1,8 @@
-# database.py — Versión DEMO con productos embebidos (sin CSV externo)
-
+# database.py
 import os, sqlite3
 from contextlib import contextmanager
 import datetime
 
-# ===========================
-#   MODO DEMO (activar aquí)
-# ===========================
-DEMO_BUILD = True  # En demo: True. En producción: False.
-
-def _build_embedded_demo_products() -> list[dict]:
-    """
-    Genera 100 productos de demostración embebidos en código.
-    Estructura parecida a tu CSV de vista previa: códigos '1'..'100',
-    nombres 'Producto N', descripciones con categoría A/B/C/D cíclica,
-    y existencias variadas.
-    """
-    products = []
-    cats = ["A", "B", "C", "D"]
-    # Cantidades variadas y determinísticas para tener dispersión
-    for i in range(1, 101):
-        cat = cats[(i - 1) % 4]
-        # Fórmula determinística (1..500) para qty
-        qty = (i * 37) % 500 + 1
-        products.append({
-            "code": str(i),
-            "name": f"Producto {i}",
-            "description": f"Descripción del producto {i} (categoría {cat})",
-            "qty": qty
-        })
-    return products
-
-# ===========================
-#   Config / conexión
-# ===========================
 DB_FILE = os.path.join(os.path.dirname(__file__), "almacen.db")
 _conn = None
 
@@ -58,9 +27,6 @@ def init_db(db_path: str | None = None):
     _migrate_to_m2m()
     _ensure_product_extra_columns()  # <- añade category/unit/unit_factor si faltan
     _conn.commit()
-
-    # Activar semilla demo si aplica
-    _maybe_seed_demo()
 
 @contextmanager
 def _cur():
@@ -200,7 +166,7 @@ def _create_schema():
             FOREIGN KEY(warehouse_id) REFERENCES warehouses(id) ON DELETE CASCADE
         )""")
 
-        # Reglas de reabastecimiento
+        # === NUEVO: Reglas de reabastecimiento (por producto/almacén) ===
         c.execute("""
         CREATE TABLE IF NOT EXISTS product_rules(
             code TEXT NOT NULL,
@@ -216,7 +182,7 @@ def _create_schema():
         )""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_rules_wh ON product_rules(warehouse_id)")
 
-        # Proveedores / Clientes
+        # === NUEVO: Proveedores / Clientes ===
         c.execute("""
         CREATE TABLE IF NOT EXISTS suppliers(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,7 +196,7 @@ def _create_schema():
             contact TEXT
         )""")
 
-        # Ubicaciones internas
+        # === NUEVO: Ubicaciones internas ===
         c.execute("""
         CREATE TABLE IF NOT EXISTS warehouse_locations(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,7 +217,7 @@ def _create_schema():
             FOREIGN KEY(location_id) REFERENCES warehouse_locations(id) ON DELETE SET NULL
         )""")
 
-        # Ajustes (cabecera)
+        # === NUEVO: Ajustes (cabecera) ===
         c.execute("""
         CREATE TABLE IF NOT EXISTS adjustments(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,7 +230,7 @@ def _create_schema():
             FOREIGN KEY(doc_id) REFERENCES movement_docs(id) ON DELETE SET NULL
         )""")
 
-        # Conteos cíclicos
+        # === NUEVO: Conteos cíclicos ===
         c.execute("""
         CREATE TABLE IF NOT EXISTS count_sessions(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -890,95 +856,3 @@ def is_product_linked(code: str, warehouse_id: int) -> bool:
             SELECT 1 FROM product_warehouse WHERE product_id = ? AND warehouse_id = ? LIMIT 1
         """, (prod["id"], warehouse_id)).fetchone()
         return bool(row)
-
-# ===========================
-#   Helpers DEMO (embebido)
-# ===========================
-def _get_or_create_warehouse(name: str, description: str = "", color_key: str = "slate") -> int:
-    with _cur() as c:
-        row = c.execute("SELECT id FROM warehouses WHERE name=?", (name,)).fetchone()
-        if row:
-            return int(row["id"])
-        c.execute("INSERT INTO warehouses(name, description, color_key) VALUES(?,?,?)",
-                  (name, description or "", color_key or "slate"))
-        return int(c.lastrowid)
-
-def _seed_demo_from_embedded(wh1_id: int, wh2_id: int):
-    """
-    Siembra productos embebidos: alta/actualización, vínculo a ambos almacenes,
-    y reparto de 'qty' 50/50 entre w1 y w2.
-    """
-    for p in _build_embedded_demo_products():
-        code = str(p.get("code", "")).strip()
-        if not code:
-            continue
-        name = str(p.get("name", code)).strip()
-        desc = str(p.get("description", "")).strip()
-        qty  = int(p.get("qty", 0) or 0)
-
-        # Alta o actualización sin asignar almacén en products
-        upsert_product(code, name, desc, warehouse_id=None)
-
-        # Vincular a ambos almacenes (stock inicial 0)
-        link_product_to_warehouse(code, wh1_id)
-        link_product_to_warehouse(code, wh2_id)
-
-        # Reparto 50/50 si qty > 0
-        if qty > 0:
-            q1 = qty // 2 + (qty % 2)
-            q2 = qty // 2
-            set_stock(code, wh1_id, q1, note="DEMO: carga inicial")
-            set_stock(code, wh2_id, q2, note="DEMO: carga inicial")
-
-def _maybe_seed_demo():
-    """
-    Activa modo DEMO si DEMO_BUILD=True.
-    - Crea siempre los 2 almacenes demo (idempotente).
-    - Si no hay productos: carga embebidos y reparte stock 50/50.
-    - Si ya hay productos: los vincula a ambos almacenes (stock 0).
-    Marca app_state.demo_seeded=1 para no repetir.
-    """
-    try:
-        if not globals().get("DEMO_BUILD", False):
-            return
-
-        # ¿Ya se sembró?
-        with _cur() as c:
-            seeded = c.execute("SELECT value FROM app_state WHERE key='demo_seeded'").fetchone()
-            if seeded and (seeded['value'] or '').strip() == '1':
-                # Asegurar almacenes (idempotente) y salir
-                _get_or_create_warehouse("DEMO-ALM-01", "Almacén de demostración 1", "indigo")
-                _get_or_create_warehouse("DEMO-ALM-02", "Almacén de demostración 2", "emerald")
-                return
-            prod_count = c.execute("SELECT COUNT(1) FROM products").fetchone()[0] or 0
-
-        # Crear siempre los 2 almacenes demo (idempotente)
-        w1 = _get_or_create_warehouse("DEMO-ALM-01", "Almacén de demostración 1", "indigo")
-        w2 = _get_or_create_warehouse("DEMO-ALM-02", "Almacén de demostración 2", "emerald")
-
-        # Si no hay productos, sembrar los embebidos
-        if int(prod_count) == 0:
-            _seed_demo_from_embedded(w1, w2)
-            src = "EMBEDDED:100"
-        else:
-            # Ya había productos: solo vincularlos a ambos almacenes con stock 0
-            with _cur() as c:
-                rows = c.execute("SELECT code FROM products ORDER BY code").fetchall()
-            for r in rows:
-                code = r["code"] if isinstance(r, dict) or hasattr(r, "keys") else r[0]
-                link_product_to_warehouse(code, w1)
-                link_product_to_warehouse(code, w2)
-            src = f"LINK_ONLY:{prod_count}"
-
-        with _cur() as c:
-            c.execute("INSERT OR REPLACE INTO app_state(key,value) VALUES('demo_seeded','1')")
-            c.execute("INSERT OR REPLACE INTO app_state(key,value) VALUES('demo_seed_log', ?)", (src,))
-        if _conn:
-            _conn.commit()
-
-    except Exception as e:
-        try:
-            with _cur() as c:
-                c.execute("INSERT OR REPLACE INTO app_state(key,value) VALUES('demo_seeded',?)", (f'ERR:{e}',))
-        except Exception:
-            pass
