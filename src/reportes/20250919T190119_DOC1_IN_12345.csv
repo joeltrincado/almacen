@@ -1,0 +1,12 @@
+﻿Documento,1
+Fecha,2025-09-19 19:01:19
+Tipo,IN
+Almacén,Almacen 1
+Referencia,12345
+Contraparte,Joel Trincado
+Nota,Producto de entrada
+Total líneas,1
+Total unidades,190
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0001,Producto 1,190,IN,Entrada manual,2025-09-19 19:01:19

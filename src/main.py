@@ -16,13 +16,157 @@ def main(page: ft.Page):
     db.ensure_color_column()
     db.ensure_products_table()
 
-    page.title = "Control de Almacen"
+    page.title = "CA Software"
     page.padding = 0
     page.spacing = 0
     page.horizontal_alignment = "stretch"
     page.vertical_alignment = "stretch"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.window.maximized = True
+    # --- Sesión / Roles ---
+    current_user = {"id": None, "username": "", "name": "", "role": "viewer"}
+    ROLE_LEVEL = {"viewer": 0, "operator": 1, "supervisor": 2, "admin": 3}
+    def role_level():
+        return ROLE_LEVEL.get((current_user.get("role") or "viewer").lower(), 0)
+    def has_role(min_role: str) -> bool:
+        return role_level() >= ROLE_LEVEL.get(min_role, 0)
+    def ensure_role(min_role: str, section: str) -> bool:
+        if not has_role(min_role):
+            page.open(cmp.make_snackbar("warning", f"Permisos insuficientes para '{section}'."))
+            page.update()
+            return False
+        return True
+    
+    def rebuild_menubar_permissions():
+        REQS = {
+            "Ver almacenes": "viewer",
+            "Crear un almacen": "supervisor",
+            "Transferir stock": "operator",
+            "Entrada de productos": "operator",
+            "Salida de productos": "operator",
+            "Ver productos": "viewer",
+            "Agregar Lista de Productos": "supervisor",
+            "Categorías y unidades": "supervisor",
+            "Buscar un producto": "viewer",
+            "Proveedores": "operator",
+            "Clientes": "operator",
+            "Reglas por producto": "supervisor",
+            "Sugerencia de compra": "supervisor",
+        }
+        try:
+            for sm in getattr(menubar, "controls", []) or []:
+                for it in getattr(sm, "controls", []) or []:
+                    label = ""
+                    try:
+                        if hasattr(it, "content") and hasattr(it.content, "value"):
+                            label = it.content.value
+                        elif hasattr(it, "content") and hasattr(it.content, "text"):
+                            label = it.content.text
+                    except Exception:
+                        pass
+                    min_role = REQS.get(str(label), "viewer")
+                    it.disabled = not has_role(min_role)
+                    it.style = ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))
+        except Exception:
+            pass
+        page.update()
+
+    # --- UI: diálogos de sesión ---
+    def do_logout(e=None):
+        current_user["id"] = None
+        current_user["username"] = ""
+        current_user["name"] = ""
+        current_user["role"] = "viewer"
+        try:
+            refresh_appbar()
+        except Exception:
+            pass
+        page.open(cmp.make_snackbar("info", "Sesión cerrada."))
+        open_login_dialog()
+        page.update()
+
+    def open_create_user_dialog(e=None):
+        if not has_role("admin"):
+            page.open(cmp.make_snackbar("warning", "Solo un administrador puede crear usuarios."))
+            page.update()
+            return
+        u_tf = ft.TextField(label="Usuario", width=260, border_radius=5)
+        n_tf = ft.TextField(label="Nombre", width=260, border_radius=5)
+        r_dd = ft.Dropdown(label="Rol", width=260, options=[
+            ft.dropdown.Option("viewer","viewer"),
+            ft.dropdown.Option("operator","operator"),
+            ft.dropdown.Option("supervisor","supervisor"),
+            ft.dropdown.Option("admin","admin"),
+        ], value="operator", border_radius=5)
+        p_tf = ft.TextField(label="Contraseña", password=True, can_reveal_password=True, width=260, border_radius=5)
+
+        def save_user(ev=None):
+            try:
+                uid = db.create_user(u_tf.value or "", n_tf.value or "", r_dd.value or "operator", p_tf.value or "")
+                page.open(cmp.make_snackbar("success", f"Usuario creado (id={uid})."))
+                dlg.open = False
+                page.update()
+            except Exception as ex:
+                page.open(cmp.make_snackbar("error", f"No se pudo crear: {ex}"))
+                page.update()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Crear usuario"),
+            content=ft.Column([u_tf, n_tf, r_dd, p_tf], tight=True),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update()), style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+                ft.TextButton("Guardar", on_click=save_user, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+                ],
+            actions_alignment=ft.MainAxisAlignment.END,
+            shape=ft.RoundedRectangleBorder(radius=5)
+        )
+        page.open(dlg)
+        dlg.open = True
+        page.update()
+
+    def open_login_dialog():
+
+        def do_login(e):
+            u = (user_tf.value or "").strip()
+            p = (pwd_tf.value or "")
+            try:
+                user = db.verify_user_password(u, p)
+            except Exception:
+                user = None
+            if not user:
+                error_txt.value = "Credenciales inválidas"
+                page.update()
+                return
+            current_user["id"] = user.get("id")
+            current_user["username"] = user.get("username", "")
+            current_user["name"] = user.get("name", "")
+            current_user["role"] = user.get("role", "viewer")
+            dlg.open = False
+            try:
+                refresh_appbar()
+            except Exception:
+                pass
+            page.open(cmp.make_snackbar("success", f"Bienvenido, {current_user['name']}"))
+            page.update()
+
+        user_tf = ft.TextField(label="Usuario", autofocus=True, border_radius=5)
+        pwd_tf = ft.TextField(label="Contraseña", password=True, can_reveal_password=True, border_radius=5, on_submit=do_login)
+        error_txt = ft.Text("", color=ft.Colors.RED)
+
+        
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Iniciar sesión"),
+            content=ft.Column([user_tf, pwd_tf, error_txt], tight=True),
+            actions=[ft.TextButton("Ingresar", on_click=do_login, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)))],
+            actions_alignment=ft.MainAxisAlignment.END,
+            shape=ft.RoundedRectangleBorder(radius=5),
+        )
+        page.open(dlg)
+        dlg.open = True
+        page.update()
+    
 
     # =========================
     #   ESTADO GLOBAL
@@ -114,7 +258,7 @@ def main(page: ft.Page):
         dlg = ft.AlertDialog(
             modal=True,
             title=ft.Text(f"Producto: {code}"),
-            shape=ft.RoundedRectangleBorder(radius=8),
+            shape=ft.RoundedRectangleBorder(radius=5),
             content=ft.Column(
                 spacing=8, width=520, height=300, scroll=ft.ScrollMode.AUTO,
                 controls=[
@@ -162,7 +306,7 @@ def main(page: ft.Page):
         add_card = ft.Container(
             ink=True,
             on_click=lambda e: open_create_dialog(),
-            border_radius=16,
+            border_radius=5,
             bgcolor=ft.Colors.GREY_100,
             padding=16,
             content=ft.Column(
@@ -172,7 +316,7 @@ def main(page: ft.Page):
                 controls=[
                     ft.Container(
                         width=56, height=56,
-                        border_radius=28,
+                        border_radius=5,
                         bgcolor=ft.Colors.GREY_200,
                         alignment=ft.alignment.center,
                         content=ft.Icon(ft.Icons.ADD, size=28, color=ft.Colors.GREY_700),
@@ -579,7 +723,7 @@ def main(page: ft.Page):
 
             item = ft.Container(
                 ink=True,
-                border_radius=8,
+                border_radius=5,
                 padding=ft.padding.symmetric(10, 12),
                 on_click=lambda e, c=code, n=name: open_product_detail(c, n),
                 content=ft.Row(
@@ -616,7 +760,7 @@ def main(page: ft.Page):
 
         def kpi(label: str, value: str, icon=ft.Icons.INSIGHTS):
             return ft.Container(
-                padding=ft.padding.all(14), bgcolor=ft.Colors.GREY_50, border_radius=12,
+                padding=ft.padding.all(14), bgcolor=ft.Colors.GREY_50, border_radius=5,
                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                     ft.Column(controls=[ft.Text(label, size=12, color=ft.Colors.GREY_700),
                                         ft.Text(value, size=20, weight=ft.FontWeight.BOLD)]),
@@ -709,7 +853,7 @@ def main(page: ft.Page):
             location_dd.options = [ft.dropdown.Option(str(l["id"]), text=f"{l['code']} {l.get('name') or ''}") for l in locs]
             for l in locs:
                 list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=8,
+                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
                                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                                     ft.Text(f"{l['code']}", size=13, weight=ft.FontWeight.W_600),
                                     ft.Text(l.get("name") or "—", size=12, color=ft.Colors.GREY_700)
@@ -757,7 +901,7 @@ def main(page: ft.Page):
             list_col.controls[:] = []
             for p in db.list_products():
                 list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=8,
+                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
                                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                                     ft.Text(f"{p['code']} – {p['name']}", size=13, weight=ft.FontWeight.W_600),
                                     ft.Text(f"{p.get('category') or '—'} | {p.get('unit') or '—'} x {p.get('unit_factor') or 1}", size=12, color=ft.Colors.GREY_700)
@@ -797,7 +941,7 @@ def main(page: ft.Page):
             list_col.controls[:] = []
             for r in db.list_suppliers():
                 list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=8,
+                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
                                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                                     ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
                                     ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700)
@@ -835,7 +979,7 @@ def main(page: ft.Page):
             list_col.controls[:] = []
             for r in db.list_customers():
                 list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=8,
+                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
                                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                                     ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
                                     ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700)
@@ -898,7 +1042,7 @@ def main(page: ft.Page):
             for r in rows:
                 list_col.controls.append(
                     ft.Container(
-                        padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=8,
+                        padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
                         content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                             ft.Text(f"{r['code']} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
                             ft.Text(f"min:{r['min_qty']} max:{r['max_qty']} RP:{r['reorder_point']} mult:{r['multiple']} LT:{r['lead_time_days']}d",
@@ -1138,7 +1282,7 @@ def main(page: ft.Page):
             ft.Container(padding=ft.padding.only(8,0), content=captura),
             ft.Container(expand=True, padding=ft.padding.all(8), content=lines_col),
             ft.Container(padding=ft.padding.all(8), content=ft.FilledButton("Aplicar ajuste", icon=ft.Icons.SAVE, on_click=apply_adjustment,
-                                                                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6))))
+                                                                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))))
         ]
         page.update()
 
@@ -1215,7 +1359,7 @@ def main(page: ft.Page):
             ref=search_tf_ref,
             hint_text="Buscar por código, nombre o descripción...",
             autofocus=True,
-            border_radius=50,
+            border_radius=5,
             border=ft.InputBorder.NONE,
             text_size=20,
             content_padding=ft.padding.symmetric(14, 20),
@@ -1225,7 +1369,7 @@ def main(page: ft.Page):
 
         search_bar = ft.Container(
             bgcolor=ft.Colors.GREY_100,
-            border_radius=28,
+            border_radius=5,
             padding=ft.padding.symmetric(6, 14),
             content=ft.Row(
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -1235,7 +1379,7 @@ def main(page: ft.Page):
                     ft.Container(expand=True, content=search_tf),
                     ft.Container(
                         padding=ft.padding.symmetric(6, 10),
-                        border_radius=14,
+                        border_radius=5,
                         bgcolor=ft.Colors.GREY_200,
                         content=ft.Text("Ctrl/⌘ + K", size=11, color=ft.Colors.GREY_700),
                     ),
@@ -1300,7 +1444,7 @@ def main(page: ft.Page):
             modal=True,
             title=ft.Text("Cargando productos..."),
             content=ft.Column([prog, lbl], spacing=10, width=420, height=60),
-            shape=ft.RoundedRectangleBorder(radius=8),
+            shape=ft.RoundedRectangleBorder(radius=5),
             shadow_color=ft.Colors.BLACK38,
             actions=[],
         )
@@ -1821,7 +1965,7 @@ def main(page: ft.Page):
         actions=[
             ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg_report,"open",False), page.update(), close_dialog())),
             ft.FilledButton("Generar y registrar", icon=ft.Icons.DESCRIPTION, on_click=_do_report_and_apply,
-                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -1899,10 +2043,10 @@ def main(page: ft.Page):
         actions=[
             ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg_transfer,"open",False), page.update(), close_dialog())),
             ft.FilledButton("Transferir", icon=ft.Icons.SEND, on_click=transfer_do,
-                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
-        shape=ft.RoundedRectangleBorder(radius=8),
+        shape=ft.RoundedRectangleBorder(radius=5),
     )
 
     def open_transfer_dialog():
@@ -1989,13 +2133,13 @@ def main(page: ft.Page):
                         ft.IconButton(
                             icon=ft.Icons.DOWNLOAD, tooltip="Exportar CSV",
                             on_click=lambda e, _d=d: export_doc_and_notify(_d, "csv"),
-                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6)),
+                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
                             icon_size=18, width=34, height=34
                         ),
                         ft.IconButton(
                             icon=ft.Icons.PICTURE_AS_PDF, tooltip="Exportar PDF",
                             on_click=lambda e, _d=d: export_doc_and_notify(_d, "pdf"),
-                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6)),
+                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
                             icon_size=18, width=34, height=34
                         ),
                     ]
@@ -2019,7 +2163,7 @@ def main(page: ft.Page):
                 items.append(
                     ft.Container(
                         padding=ft.padding.symmetric(8, 10),
-                        border_radius=8,
+                        border_radius=5,
                         bgcolor=ft.Colors.GREY_50,
                         content=ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -2106,7 +2250,7 @@ def main(page: ft.Page):
                 items.append(
                     ft.Container(
                         padding=ft.padding.symmetric(8,10),
-                        border_radius=8,
+                        border_radius=5,
                         bgcolor=ft.Colors.GREY_50,
                         content=ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -2127,7 +2271,7 @@ def main(page: ft.Page):
                                             icon=ft.Icons.TUNE,
                                             tooltip="Definir umbral",
                                             on_click=lambda e, _c=code: set_threshold_dialog(_c),
-                                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6)),
+                                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
                                             icon_size=18, width=34, height=34
                                         ),
                                     ],
@@ -2173,7 +2317,7 @@ def main(page: ft.Page):
                             setattr(dlg, "open", False), page.update(), close_dialog(),
                             set_threshold_dialog((tf_code.value or "").strip())
                         ),
-                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))
+                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))
                     ),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END
@@ -2226,7 +2370,7 @@ def main(page: ft.Page):
 
         drop_zone = ft.Container(
             width=520, height=280, bgcolor=ft.Colors.GREY_100,
-            border=ft.border.all(2, ft.Colors.GREY_300), border_radius=8, ink=True,
+            border=ft.border.all(2, ft.Colors.GREY_300), border_radius=5, ink=True,
             on_click=lambda e: file_picker.pick_files(allow_multiple=False, allowed_extensions=["csv", "xlsx", "xls"]),
             content=hint, alignment=ft.alignment.center,
         )
@@ -2413,7 +2557,7 @@ def main(page: ft.Page):
                     items.append(
                         ft.Container(
                             padding=ft.padding.symmetric(8, 10),
-                            border_radius=8,
+                            border_radius=5,
                             bgcolor=ft.Colors.GREY_50,
                             content=ft.Row(
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -2498,7 +2642,7 @@ def main(page: ft.Page):
         title=ft.Text("No hay almacenes"),
         content=ft.Text("Debes crear al menos un almacén antes de continuar."),
         actions=[ft.FilledButton("Crear un almacén", on_click=lambda e: (close_dialog(), open_create_dialog()),
-                                 style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)))],
+                                 style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)))],
         actions_alignment=ft.MainAxisAlignment.END,
     )
 
@@ -2515,9 +2659,9 @@ def main(page: ft.Page):
         content=ft.Column([name_tf, color_dd], tight=True, spacing=10, width=400),
         actions=[
             ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg_create, "open", False), page.update(), close_dialog()),
-                          style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+                          style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
             ft.FilledButton("Guardar", on_click=lambda e: save_warehouse(),
-                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -2529,7 +2673,7 @@ def main(page: ft.Page):
         actions=[
             ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg_delete, "open", False), page.update(), close_dialog())),
             ft.FilledButton("Eliminar", on_click=lambda e: do_delete_warehouse(),
-                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -2586,7 +2730,7 @@ def main(page: ft.Page):
         title=ft.Text("¿A qué almacén se agregarán estos productos?"),
         content=ft.Column([wh_dd, replace_stock_cb], spacing=10, width=380, tight=True),
         actions=[ft.TextButton("Cancelar", on_click=on_pick_wh_cancel),
-                 ft.FilledButton("Confirmar", on_click=on_pick_wh_confirm, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)))],
+                 ft.FilledButton("Confirmar", on_click=on_pick_wh_confirm, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)))],
         actions_alignment=ft.MainAxisAlignment.END,
     )
 
@@ -2609,7 +2753,7 @@ def main(page: ft.Page):
         shape=ft.RoundedRectangleBorder(radius=5),
         actions=[
             ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg_entry, "open", False), page.update(), close_dialog())),
-            ft.FilledButton("Confirmar", on_click=entry_confirm, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+            ft.FilledButton("Confirmar", on_click=entry_confirm, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -2635,7 +2779,7 @@ def main(page: ft.Page):
         actions=[
             ft.TextButton("Vaciar", on_click=exit_clear),
             ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg_exit, "open", False), page.update(), close_dialog())),
-            ft.FilledButton("Confirmar", on_click=exit_confirm, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+            ft.FilledButton("Confirmar", on_click=exit_confirm, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -2672,13 +2816,13 @@ def main(page: ft.Page):
     menubar = ft.MenuBar(
         expand=True,
         style=ft.MenuStyle(
-            alignment=ft.alignment.top_left, bgcolor=ft.Colors.WHITE,
+            alignment=ft.alignment.top_left, bgcolor=ft.Colors.TRANSPARENT,
             mouse_cursor={ft.ControlState.HOVERED: ft.MouseCursor.WAIT, ft.ControlState.DEFAULT: ft.MouseCursor.ZOOM_OUT},
-            shape=ft.RoundedRectangleBorder(radius=0),
+            shape=ft.RoundedRectangleBorder(radius=5), shadow_color=ft.Colors.TRANSPARENT
         ),
         controls=[
         ft.SubmenuButton(
-            content=ft.Text("Almacén"),
+            content=ft.Text("Almacén", size=14),
             controls=[
                 cmp.menu_item("Ver almacenes", ft.Icons.INVENTORY, handle_menu_item_click, data="warehouses_view"),
                 cmp.menu_item("Crear un almacen", ft.Icons.WAREHOUSE, handle_menu_item_click, data="warehouse_new", disabled=True),
@@ -2692,7 +2836,7 @@ def main(page: ft.Page):
             ],
         ),
         ft.SubmenuButton(
-            content=ft.Text("Productos"),
+            content=ft.Text("Productos", size=14),
             controls=[
                 cmp.menu_item("Ver productos", ft.Icons.INVENTORY_SHARP, handle_menu_item_click, data="products_view"),
                 cmp.menu_item("Agregar Lista de Productos", ft.Icons.FILE_OPEN, handle_menu_item_click, data="products_import", disabled=True),
@@ -2701,13 +2845,13 @@ def main(page: ft.Page):
             ],
         ),
         ft.SubmenuButton(
-            content=ft.Text("Buscar"),
+            content=ft.Text("Buscar", size=14),
             controls=[
                 cmp.menu_item("Buscar un producto", ft.Icons.SEARCH, handle_menu_item_click, data="search_product"),
             ],
         ),
         ft.SubmenuButton(
-            content=ft.Text("Contrapartes"),
+            content=ft.Text("Contrapartes", size=14),
             controls=[
                 cmp.menu_item("Proveedores", ft.Icons.SUPPORT_AGENT, lambda e: render_suppliers_page()),
                 cmp.menu_item("Clientes", ft.Icons.PERSON, lambda e: render_customers_page()),
@@ -2716,7 +2860,7 @@ def main(page: ft.Page):
 
         # Nuevo Submenu "Reabastecimiento"
         ft.SubmenuButton(
-            content=ft.Text("Reabastecimiento"),
+            content=ft.Text("Reabastecimiento", size=14),
             controls=[
                 cmp.menu_item("Reglas por producto", ft.Icons.TUNE, lambda e: render_replenishment_rules_page()),
             ],
@@ -2724,13 +2868,13 @@ def main(page: ft.Page):
 
         # Nuevo Submenu "Dashboard"
         ft.SubmenuButton(
-            content=ft.Text("Dashboard"),
+            content=ft.Text("Dashboard", size=14),
             controls=[
                 cmp.menu_item("Hoy", ft.Icons.DASHBOARD, lambda e: render_dashboard_page()),
             ],
         ),
         ft.SubmenuButton(
-            content=ft.Text("Reportes"),
+            content=ft.Text("Reportes", size=14),
             controls=[
                 cmp.menu_item("Movimientos", ft.Icons.LIST, lambda e: render_movements_page()),
                 cmp.menu_item("Stock bajo", ft.Icons.WARNING, lambda e: render_low_stock_page()),
@@ -2739,13 +2883,56 @@ def main(page: ft.Page):
         ),
     ],
     )
+    def refresh_appbar():
+        actions = []
+        if current_user.get("id"):
+            if has_role("admin"):
+                actions.append(ft.FilledTonalButton("Crear usuario", icon=ft.Icons.PERSON_ADD, on_click=open_create_user_dialog,
+                                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))))
+            actions.append(ft.OutlinedButton("Cerrar sesión", icon=ft.Icons.LOGOUT, on_click=do_logout,
+                                             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))))
+        else:
+            actions = [ft.FilledButton("Iniciar sesión", icon=ft.Icons.LOGIN, on_click=lambda e: open_login_dialog(),
+                                       style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)))]
+        try:
+            session_actions_row.controls[:] = actions
+        except Exception:
+            pass
+        page.appbar = None
+        try:
+            rebuild_menubar_permissions()
+        except Exception:
+            pass
+        page.update()
+    
+    session_actions_row = ft.Row(spacing=8, controls=[], alignment=ft.MainAxisAlignment.END,)
+
 
     # Header ancho completo
     top_bar = ft.Container(
-        bgcolor=ft.Colors.WHITE,
-        height=56,
-        padding=0,
-        content=ft.Row(controls=[menubar], expand=True),  # <- fuerza a ocupar el ancho disponible
+        bgcolor=ft.Colors.TRANSPARENT,
+        shape=ft.RoundedRectangleBorder(radius=5),
+        height=50,
+        padding=ft.padding.only(left=10, right=10, top=10, bottom=10),
+        margin=0,
+        content=ft.Row(controls=[ft.Container(expand=True, content=menubar), ft.Container(width=20), session_actions_row], expand=True),  # <- fuerza a ocupar el ancho disponible
+    )
+    top_bar_icons = ft.Container(
+        bgcolor=ft.Colors.BLUE_50,
+        shape=ft.RoundedRectangleBorder(radius=5),
+        height=60,
+        padding=10,
+        content=ft.Row(controls=[
+            ft.IconButton(ft.Icons.WAREHOUSE, on_click=handle_menu_item_click, data="warehouses_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+            ft.VerticalDivider(),
+            ft.IconButton(ft.Icons.INVENTORY, on_click=handle_menu_item_click, data="products_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+            ft.VerticalDivider(),
+            ft.IconButton(ft.Icons.SEARCH, on_click=handle_menu_item_click, data="search_product", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+            ft.VerticalDivider(),
+            ft.IconButton(ft.Icons.DASHBOARD, on_click=handle_menu_item_click, data="dashboard_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+            ft.VerticalDivider(),
+            ft.IconButton(ft.Icons.LIST, on_click=handle_menu_item_click, data="movements_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+        ], expand=True, spacing=10, run_spacing=10),  # <- fuerza a ocupar el ancho disponible
     )
 
     # Raíz de la UI
@@ -2754,17 +2941,23 @@ def main(page: ft.Page):
         content=ft.Column(
             controls=[
                top_bar,
-                ft.Divider(height=1, color=ft.Colors.GREY_200),
+                top_bar_icons,
                 content_area,  # <- el cuerpo (expand=True)
             ],
-            expand=True,
+            expand=True, spacing=0
         ),
         top=True, bottom=True, left=True, right=True, expand=True,
     )
 )
+    refresh_appbar()
+    open_login_dialog()
+
 
     # Arranque en "Almacenes"
     render_warehouses()
 
 if __name__ == "__main__":
     ft.app(target=main)
+
+    
+    

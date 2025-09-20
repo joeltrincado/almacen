@@ -1,0 +1,12 @@
+﻿Documento,5
+Fecha,2025-09-19 18:17:05
+Tipo,IN
+Almacén,Almacen 1
+Referencia,32321
+Contraparte,321321
+Nota,321312
+Total líneas,1
+Total unidades,10
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0003,Producto 3,10,IN,Entrada manual,2025-09-19 18:17:05

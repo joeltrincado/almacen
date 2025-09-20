@@ -308,3 +308,5 @@ def now_timestamp_compact():
     # YYYYMMDD_HHMMSS
     from datetime import datetime
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+

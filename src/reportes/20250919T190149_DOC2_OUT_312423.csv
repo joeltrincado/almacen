@@ -1,0 +1,12 @@
+﻿Documento,2
+Fecha,2025-09-19 19:01:49
+Tipo,OUT
+Almacén,Almacen 1
+Referencia,312423
+Contraparte,Joel Trincado
+Nota,Joel Trincado
+Total líneas,1
+Total unidades,380
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0001,Producto 1,380,OUT,Salida manual,2025-09-19 19:01:49

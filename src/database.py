@@ -413,16 +413,65 @@ def resolve_to_canonical_code(any_code: str) -> str:
         return row["code"]
 
 # ---------------- Documentos (Reportes) ----------------
-def create_movement_doc(doc_type: str, warehouse_id: int, counterparty: str = "", reference: str = "", note: str = "",
-                        total_lines: int = 0, total_qty: int = 0) -> int:
+
+def _next_doc_folio(series: str) -> int:
+    """
+    Devuelve el siguiente folio incremental para la serie dada.
+    Si no hay folios aún en esa serie, retorna 1.
+    """
+    s = (series or "GEN").strip().upper()
     with _cur() as c:
-        c.execute("""
-            INSERT INTO movement_docs(doc_type, warehouse_id, counterparty, reference, note, total_lines, total_qty)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (doc_type, warehouse_id, counterparty or "", reference or "", note or "", int(total_lines or 0), int(total_qty or 0)))
+        row = c.execute("SELECT MAX(folio) FROM movement_docs WHERE series = ?", (s,)).fetchone()
+    last = row[0] if row else None
+    try:
+        return int(last) + 1 if last is not None else 1
+    except Exception:
+        return 1
+
+
+def create_movement_doc(
+    doc_type: str,
+    warehouse_id: int,
+    counterparty: str = "",
+    reference: str = "",
+    note: str = "",
+    total_lines: int = 0,
+    total_qty: int = 0,
+    series: str | None = None,
+    folio: int | None = None,
+    status: str = "posted",
+) -> int:
+    """Crea encabezado de documento (IN/OUT/ADJ) con soporte de series/folio/status."""
+    # Asegurar columnas y constraints (idempotente)
+    try:
+        ensure_movement_doc_series_status()
+    except Exception:
+        pass
+    s = (series or "GEN").strip().upper()
+    try:
+        f = folio if (folio and int(folio) > 0) else _next_doc_folio(s)
+    except Exception:
+        f = folio or None
+    st = (status or "posted").strip().lower()
+
+    with _cur() as c:
+        if f is None:
+            # permitir folio NULL si no podemos calcularlo ahora
+            c.execute("""
+                INSERT INTO movement_docs(doc_type, warehouse_id, counterparty, reference, note,
+                                          total_lines, total_qty, series, folio, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """, (doc_type, warehouse_id, counterparty or "", reference or "", note or "",
+                    int(total_lines or 0), int(total_qty or 0), s, st))
+        else:
+            c.execute("""
+                INSERT INTO movement_docs(doc_type, warehouse_id, counterparty, reference, note,
+                                          total_lines, total_qty, series, folio, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (doc_type, warehouse_id, counterparty or "", reference or "", note or "",
+                    int(total_lines or 0), int(total_qty or 0), s, int(f), st))
         return int(c.lastrowid)
 
-# ---------------- Stock (IN/OUT/ADJ/XFER) ----------------
 def increment_stock(code_or_alias: str, warehouse_id: int, qty: int, note: str = "", doc_id: int | None = None):
     if qty <= 0: return
     with _cur() as c:
@@ -614,9 +663,13 @@ def get_movement_doc(doc_id: int) -> dict | None:
     with _cur() as c:
         row = c.execute("""
             SELECT d.id, d.ts, d.doc_type, d.warehouse_id, w.name AS warehouse,
-                   d.counterparty, d.reference, d.note, d.total_lines, d.total_qty
+                   d.counterparty, d.reference, d.note, d.total_lines, d.total_qty,
+                   d.created_by, cu.username AS created_by_username, cu.name AS created_by_name,
+                   d.approved_by, au.username AS approved_by_username, au.name AS approved_by_name
             FROM movement_docs d
             JOIN warehouses w ON w.id = d.warehouse_id
+            LEFT JOIN users cu ON cu.id = d.created_by
+            LEFT JOIN users au ON au.id = d.approved_by
             WHERE d.id = ?
         """, (doc_id,)).fetchone()
         return dict(row) if row else None
@@ -856,3 +909,223 @@ def is_product_linked(code: str, warehouse_id: int) -> bool:
             SELECT 1 FROM product_warehouse WHERE product_id = ? AND warehouse_id = ? LIMIT 1
         """, (prod["id"], warehouse_id)).fetchone()
         return bool(row)
+
+# ========================
+#  FASE 2: Seguridad & Auditoría
+# ========================
+
+def ensure_security_audit_schema():
+    """
+    Crea tablas de usuarios y bitácora de auditoría, y agrega columnas de usuario a movement_docs.
+    Llamar desde init_db.
+    """
+    with _cur() as c:
+        # Tabla de usuarios
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'operator',  -- operator|supervisor|admin|viewer
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""")
+
+        # Tabla de auditoría
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL DEFAULT (datetime('now')),
+            user_id INTEGER,
+            action TEXT NOT NULL,
+            entity TEXT NOT NULL,
+            entity_id INTEGER,
+            details TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+        )""")
+
+        # Columnas de usuario en movement_docs
+        if not _table_has_column("movement_docs", "created_by"):
+            c.execute("ALTER TABLE movement_docs ADD COLUMN created_by INTEGER")
+        if not _table_has_column("movement_docs", "approved_by"):
+            c.execute("ALTER TABLE movement_docs ADD COLUMN approved_by INTEGER")
+
+def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
+    import os, hashlib, binascii
+    if salt is None:
+        salt = os.urandom(16)
+    if isinstance(salt, str):
+        salt = binascii.unhexlify(salt.encode())
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000, dklen=32)
+    return binascii.hexlify(dk).decode(), binascii.hexlify(salt).decode()
+
+def create_user(username: str, name: str, role: str, password: str) -> int:
+    role = (role or "operator").lower()
+    if role not in ("viewer","operator","supervisor","admin"):
+        raise ValueError("Rol inválido")
+    pw_hash, salt = _hash_password(password)
+    with _cur() as c:
+        c.execute("""
+            INSERT INTO users(username, name, role, password_hash, salt)
+            VALUES (?,?,?,?,?)""", (username.strip(), name.strip(), role, pw_hash, salt))
+        return int(c.lastrowid)
+
+def get_user_by_username(username: str) -> dict | None:
+    with _cur() as c:
+        r = c.execute("SELECT * FROM users WHERE username = ? AND active = 1", (username.strip(),)).fetchone()
+        return dict(r) if r else None
+
+def verify_user_password(username: str, password: str) -> dict | None:
+    u = get_user_by_username(username)
+    if not u: 
+        return None
+    pw_hash, _ = _hash_password(password, u["salt"])
+    return u if pw_hash == u["password_hash"] else None
+
+def update_user_password(user_id: int, new_password: str):
+    pw_hash, salt = _hash_password(new_password)
+    with _cur() as c:
+        c.execute("UPDATE users SET password_hash=?, salt=? WHERE id=? AND active=1", (pw_hash, salt, user_id))
+
+def ensure_default_admin():
+    with _cur() as c:
+        r = c.execute("SELECT id FROM users WHERE role='admin' AND active=1 LIMIT 1").fetchone()
+    if not r:
+        try:
+            return create_user("admin", "Administrador", "admin", "admin")
+        except Exception:
+            pass
+
+def log_audit(user_id: int | None, action: str, entity: str, entity_id: int | None, details: str | None = None):
+    with _cur() as c:
+        c.execute("""
+            INSERT INTO audit_log(user_id, action, entity, entity_id, details)
+            VALUES (?,?,?,?,?)""", (user_id, action, entity, entity_id, details or ""))
+
+# --- Wrappers con auditoría ---
+# Guardamos las referencias originales para no perder la lógica actual
+try:
+    _orig_create_movement_doc = create_movement_doc
+    def create_movement_doc(
+        doc_type: str,
+        warehouse_id: int,
+        counterparty: str = "",
+        reference: str = "",
+        note: str = "",
+        total_lines: int = 0,
+        total_qty: int = 0,
+        series: str | None = None,
+        folio: int | None = None,
+        status: str = "posted",
+        created_by: int | None = None,
+        approved_by: int | None = None,
+    ) -> int:
+        doc_id = _orig_create_movement_doc(
+            doc_type=doc_type,
+            warehouse_id=warehouse_id,
+            counterparty=counterparty,
+            reference=reference,
+            note=note,
+            total_lines=total_lines,
+            total_qty=total_qty,
+            series=series,
+            folio=folio,
+            status=status,
+        )
+        # Actualizar campos de usuario si se proporcionan
+        try:
+            with _cur() as c:
+                if created_by is not None or approved_by is not None:
+                    c.execute("""
+                        UPDATE movement_docs
+                           SET created_by = COALESCE(?, created_by),
+                               approved_by = COALESCE(?, approved_by)
+                         WHERE id = ?
+                    """, (created_by, approved_by, doc_id))
+        except Exception:
+            pass
+        try:
+            log_audit(created_by, "CREATE_DOC", "movement_docs", doc_id, f"{doc_type}|WH:{warehouse_id}|lines:{total_lines}|qty:{total_qty}")
+        except Exception:
+            pass
+        return doc_id
+except NameError:
+    pass
+
+try:
+    _orig_increment_stock = increment_stock
+    def increment_stock(code_or_alias: str, warehouse_id: int, qty: int, note: str = "", doc_id: int | None = None, user_id: int | None = None):
+        res = _orig_increment_stock(code_or_alias, warehouse_id, qty, note=note, doc_id=doc_id)
+        try:
+            log_audit(user_id, "INCREMENT_STOCK", "stock_movements", doc_id, f"{code_or_alias}|WH:{warehouse_id}|+{qty}|{note}")
+        except Exception:
+            pass
+        return res
+except NameError:
+    pass
+
+try:
+    _orig_decrement_stock = decrement_stock
+    def decrement_stock(code_or_alias: str, warehouse_id: int, qty: int, note: str = "", doc_id: int | None = None, user_id: int | None = None):
+        res = _orig_decrement_stock(code_or_alias, warehouse_id, qty, note=note, doc_id=doc_id)
+        try:
+            log_audit(user_id, "DECREMENT_STOCK", "stock_movements", doc_id, f"{code_or_alias}|WH:{warehouse_id}|-{qty}|{note}")
+        except Exception:
+            pass
+        return res
+except NameError:
+    pass
+
+try:
+    _orig_set_stock = set_stock
+    def set_stock(code_or_alias: str, warehouse_id: int, new_qty: int, note: str = "", doc_id: int | None = None, user_id: int | None = None):
+        res = _orig_set_stock(code_or_alias, warehouse_id, new_qty, note=note, doc_id=doc_id)
+        try:
+            log_audit(user_id, "SET_STOCK", "stock_movements", doc_id, f"{code_or_alias}|WH:{warehouse_id}|={new_qty}|{note}")
+        except Exception:
+            pass
+        return res
+except NameError:
+    pass
+
+try:
+    _orig_transfer_stock = transfer_stock
+    def transfer_stock(code_or_alias: str, src_warehouse_id: int, dst_warehouse_id: int, qty: int, note: str = "Transferencia", ref_id: int | None = None, user_id: int | None = None):
+        res = _orig_transfer_stock(code_or_alias, src_warehouse_id, dst_warehouse_id, qty, note=note, ref_id=ref_id)
+        try:
+            log_audit(user_id, "TRANSFER_STOCK", "stock_movements", ref_id, f"{code_or_alias}|{src_warehouse_id}->{dst_warehouse_id}|{qty}|{note}")
+        except Exception:
+            pass
+        return res
+except NameError:
+    pass
+
+# --- Reencolar init_db para asegurar el esquema de seguridad/auditoría ---
+try:
+    _orig_init_db = init_db
+    def init_db(db_path: str | None = None):
+        _orig_init_db(db_path)
+        ensure_security_audit_schema()
+        ensure_movement_doc_series_status()  # por si llegaste a esta fase sin correr Fase 1
+        ensure_default_admin()
+        _conn.commit()
+except NameError:
+    pass
+
+# --- Phase 2: security/audit additions (idempotentes) ---
+def ensure_movement_doc_series_status():
+    """Asegura series/folio/status y el índice único (serie, folio)."""
+    with _cur() as c:
+        if not _table_has_column("movement_docs", "series"):
+            c.execute("ALTER TABLE movement_docs ADD COLUMN series TEXT")
+        if not _table_has_column("movement_docs", "folio"):
+            c.execute("ALTER TABLE movement_docs ADD COLUMN folio INTEGER")
+        if not _table_has_column("movement_docs", "status"):
+            c.execute("ALTER TABLE movement_docs ADD COLUMN status TEXT DEFAULT 'posted'")
+        c.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_movement_docs_series_folio
+            ON movement_docs(series, folio)
+            WHERE folio IS NOT NULL
+        """)

@@ -1,0 +1,12 @@
+﻿Documento,1
+Fecha,2025-09-19 17:22:40
+Tipo,OUT
+Almacén,Almacen 1
+Referencia,312321
+Contraparte,Joel Trincado Ventura
+Nota,Se venden un total de 380 piezas
+Total líneas,1
+Total unidades,380
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0001,Producto 1,380,OUT,Salida manual,2025-09-19 17:22:40

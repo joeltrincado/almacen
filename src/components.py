@@ -68,7 +68,7 @@ def quantity_chip(qty: int) -> ft.Container:
     return ft.Container(
         bgcolor=ft.Colors.RED_100 if is_zero else ft.Colors.GREY_100,
         padding=ft.padding.symmetric(2, 8),
-        border_radius=20,
+        border_radius=5,
         content=ft.Text(str(qty), size=11, color=ft.Colors.RED_700 if is_zero else ft.Colors.BLACK87),
     )
 
@@ -100,7 +100,7 @@ def menu_item(label: str, icon: str, on_click, data: str | None = None, disabled
         leading=ft.Icon(icon),
         style=ft.ButtonStyle(
             bgcolor={ft.ControlState.HOVERED: ft.Colors.GREY_200},
-            shape=ft.RoundedRectangleBorder(radius=0),
+            shape=ft.RoundedRectangleBorder(radius=5),
         ),
         on_click=on_click,
     )
@@ -113,7 +113,7 @@ def warehouse_card(warehouse: dict, on_open, on_delete, color_choices: list[tupl
         width=300,
         height=300,
         gradient=gradient_for(warehouse.get("color_key") or "slate", color_choices),
-        border_radius=8,
+        border_radius=5,
         padding=16,
         ink=True,
         on_click=lambda e, w=warehouse: on_open(e, w),
@@ -131,14 +131,14 @@ def warehouse_card(warehouse: dict, on_open, on_delete, color_choices: list[tupl
     delete_btn = ft.IconButton(
         icon=ft.Icons.DELETE_FOREVER_ROUNDED, icon_size=20, width=25, height=25,
         tooltip="Eliminar almacén", icon_color=ft.Colors.RED_600,
-        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8), padding=2, bgcolor=ft.Colors.WHITE),
+        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5), padding=2, bgcolor=ft.Colors.WHITE),
         on_click=lambda e, w=warehouse: on_delete(e, w),
     )
-    return ft.Stack(width=300, height=300, controls=[card_body, ft.Container(right=8, top=8, content=delete_btn, border_radius=8)])
+    return ft.Stack(width=300, height=300, controls=[card_body, ft.Container(right=8, top=8, content=delete_btn, border_radius=5)])
 
 def empty_warehouses(on_create) -> ft.Container:
     card = ft.Container(
-        width=520, height=300, padding=20, border_radius=12, bgcolor=ft.Colors.GREY_50,
+        width=520, height=300, padding=20, border_radius=5, bgcolor=ft.Colors.GREY_50,
         shadow=ft.BoxShadow(blur_radius=18, color=ft.Colors.BLACK12, offset=ft.Offset(0, 6)),
         content=ft.Column(
             spacing=14, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -148,7 +148,7 @@ def empty_warehouses(on_create) -> ft.Container:
                 ft.Text("Crea tu primer almacén para empezar a gestionar entradas, salidas y stock.",
                         size=12, color=ft.Colors.GREY_700, text_align=ft.TextAlign.CENTER),
                 ft.FilledButton("Crear un almacén", icon=ft.Icons.ADD_BUSINESS, on_click=on_create,
-                                style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+                                style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
             ],
         ),
     )
@@ -179,7 +179,7 @@ def movement_badge(kind: str) -> ft.Container:
         label = "TRF OUT"
     return ft.Container(
         padding=ft.padding.symmetric(2, 8),
-        border_radius=20,
+        border_radius=5,
         bgcolor=color,
         content=ft.Text(label, size=11, weight=ft.FontWeight.W_600, color=textc),
     )
