@@ -1,0 +1,15 @@
+﻿Documento,4
+Fecha,2025-09-22 20:52:27
+Tipo,OUT
+Almacén,1
+Referencia,321312321
+Contraparte,Joel Trinca
+Nota,fdsfsd
+Total líneas,4
+Total unidades,39
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0001,Producto 1,13,OUT,Salida manual,2025-09-22 20:52:27
+2,0002,Producto 2,13,OUT,Salida manual,2025-09-22 20:52:27
+3,0003,Producto 3,12,OUT,Salida manual,2025-09-22 20:52:27
+4,0004,Producto 4,1,OUT,Salida manual,2025-09-22 20:52:27
