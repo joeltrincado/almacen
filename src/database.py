@@ -1129,3 +1129,53 @@ def ensure_movement_doc_series_status():
             ON movement_docs(series, folio)
             WHERE folio IS NOT NULL
         """)
+
+
+# =========================
+#  EXTENSIONES: Usuarios & Contrapartes (edición)
+# =========================
+def _ensure_users_table():
+    with _cur() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS users(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                name TEXT,
+                role TEXT DEFAULT 'operator',
+                password_hash TEXT,
+                active INTEGER DEFAULT 1
+            )""")
+
+def list_active_users():
+    """Devuelve usuarios activos para selector de operador."""
+    _ensure_users_table()
+    with _cur() as c:
+        rows = c.execute("""
+            SELECT id, username, name, role
+            FROM users
+            WHERE IFNULL(active,1)=1
+            ORDER BY CASE WHEN IFNULL(name,'')<>'' THEN name ELSE username END
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def update_supplier(supplier_id: int, name: str, contact: str|None=None):
+    with _cur() as c:
+        c.execute("UPDATE suppliers SET name=?, contact=? WHERE id=?", (name, (contact or None), supplier_id))
+
+
+def delete_supplier(supplier_id: int):
+    """Elimina completamente el proveedor (nombre y contacto)."""
+    with _cur() as c:
+        c.execute("DELETE FROM suppliers WHERE id=?", (supplier_id,))
+
+
+def update_customer(customer_id: int, name: str, contact: str|None=None):
+    with _cur() as c:
+        c.execute("UPDATE customers SET name=?, contact=? WHERE id=?", (name, (contact or None), customer_id))
+
+
+def delete_customer(customer_id: int):
+    """Elimina completamente el cliente (nombre y contacto)."""
+    with _cur() as c:
+        c.execute("DELETE FROM customers WHERE id=?", (customer_id,))
+

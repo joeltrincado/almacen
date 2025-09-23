@@ -878,7 +878,8 @@ def main(page: ft.Page):
 
         header = cmp.header_row("Ubicaciones internas", [])
         form_add = ft.Row(wrap=True, spacing=10, controls=[wh_dd, code_tf, name_tf,
-                                                        ft.FilledButton("Agregar", icon=ft.Icons.SAVE, on_click=add_location)])
+                                                        ft.FilledButton("Agregar", 
+                            height=50, width=50, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)), icon=ft.Icons.SAVE, on_click=add_location)])
         form_assign = ft.Row(wrap=True, spacing=10, controls=[prod_code_tf, location_dd,
                                                             ft.FilledTonalButton("Asignar a producto", icon=ft.Icons.LABEL,
                                                                                 on_click=assign_location)])
@@ -938,40 +939,100 @@ def main(page: ft.Page):
         ui_state["current_view"] = "suppliers"
         name_tf = ft.TextField(label="Nombre", width=280)
         contact_tf = ft.TextField(label="Contacto", width=280)
-
         list_col = ft.Column(spacing=6, height=420, scroll=ft.ScrollMode.AUTO)
 
         def add_supplier(e):
             n = (name_tf.value or "").strip()
-            if not n: notify("warning","Nombre requerido."); return
+            if not n:
+                notify("warning", "Nombre requerido."); return
             try:
                 db.add_supplier(n, contact_tf.value or None)
-                name_tf.value = ""; contact_tf.value=""; notify("success","Proveedor agregado."); load()
+                name_tf.value = ""; contact_tf.value = ""
+                notify("success", "Proveedor agregado."); load()
             except Exception as ex:
                 notify("error", f"No se pudo guardar: {ex}")
+
+        def open_edit_dialog(row: dict):
+            _name = ft.TextField(label="Nombre", width=320, value=row.get("name") or "")
+            _contact = ft.TextField(label="Contacto", width=320, value=row.get("contact") or "")
+            dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"Editar proveedor #{row.get('id')}"),
+                content=ft.Column([_name, _contact], spacing=10, tight=True),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
+                    ft.FilledButton(
+                        "Guardar", icon=ft.Icons.SAVE,
+                        on_click=lambda e: (
+                            db.update_supplier(int(row.get("id")), (_name.value or "").strip(), (_contact.value or None)),
+                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Proveedor actualizado."), load()
+                        ),
+                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+                shape=ft.RoundedRectangleBorder(radius=5),
+            )
+            open_dialog(dlg)
+
+
+        def delete_supplier_row(row: dict):
+            dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Eliminar proveedor"),
+                content=ft.Text(f"¿Eliminar definitivamente a '{row.get('name')}'? Esta acción no se puede deshacer."),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
+                    ft.FilledButton(
+                        "Eliminar", icon=ft.Icons.DELETE_FOREVER,
+                        on_click=lambda e: (
+                            db.delete_supplier(int(row.get("id"))),
+                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Proveedor eliminado."), load()
+                        ),
+                        style=ft.ButtonStyle(color=ft.Colors.WHITE, bgcolor=ft.Colors.RED_700, shape=ft.RoundedRectangleBorder(radius=5)),
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+                shape=ft.RoundedRectangleBorder(radius=5),
+            )
+            open_dialog(dlg)
 
         def load():
             list_col.controls[:] = []
             for r in db.list_suppliers():
                 list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
-                                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                    ft.Container(
+                        padding=ft.padding.symmetric(8,10),
+                        bgcolor=ft.Colors.GREY_50, border_radius=5,
+                        content=ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Column([
                                     ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
-                                    ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700)
-                                ]))
+                                    ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700),
+                                ], spacing=2),
+                                ft.Row([
+                                    ft.IconButton(icon=ft.Icons.EDIT, tooltip="Editar", on_click=(lambda e, _r=r: open_edit_dialog(_r))),
+                                    ft.IconButton(icon=ft.Icons.DELETE_FOREVER, tooltip="Eliminar proveedor", on_click=(lambda e, _r=r: delete_supplier_row(_r))),
+                                ], spacing=4),
+                            ],
+                        )
+                    )
                 )
             if not list_col.controls:
                 list_col.controls[:] = [cmp.empty_state(ft.Icons.SUPPORT_AGENT, "Sin proveedores.")]
             page.update()
 
         header = cmp.header_row("Proveedores", [])
-        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf,
-                                                    ft.FilledButton("Agregar", icon=ft.Icons.SAVE, on_click=add_supplier)])
+        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf, ft.FilledButton("Agregar",
+                height=50, width=200, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)), icon=ft.Icons.SAVE, on_click=add_supplier)])
         content_column.controls[:] = [
             ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
             ft.Container(padding=ft.padding.only(8,0), content=form),
             ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]; page.update(); load()
+        ]
+        page.update()
+        load()
 
     def render_customers_page():
         ui_state["current_view"] = "customers"
@@ -981,36 +1042,95 @@ def main(page: ft.Page):
 
         def add_customer(e):
             n = (name_tf.value or "").strip()
-            if not n: notify("warning","Nombre requerido."); return
+            if not n:
+                notify("warning", "Nombre requerido."); return
             try:
                 db.add_customer(n, contact_tf.value or None)
-                name_tf.value = ""; contact_tf.value=""; notify("success","Cliente agregado."); load()
+                name_tf.value = ""; contact_tf.value = ""
+                notify("success", "Cliente agregado."); load()
             except Exception as ex:
                 notify("error", f"No se pudo guardar: {ex}")
+
+        def open_edit_dialog(row: dict):
+            _name = ft.TextField(label="Nombre", width=320, value=row.get("name") or "")
+            _contact = ft.TextField(label="Contacto", width=320, value=row.get("contact") or "")
+            dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"Editar cliente #{row.get('id')}"),
+                content=ft.Column([_name, _contact], spacing=10, tight=True),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
+                    ft.FilledButton(
+                        "Guardar", icon=ft.Icons.SAVE,
+                        on_click=lambda e: (
+                            db.update_customer(int(row.get("id")), (_name.value or "").strip(), (_contact.value or None)),
+                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Cliente actualizado."), load()
+                        ),
+                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+                shape=ft.RoundedRectangleBorder(radius=5),
+            )
+            open_dialog(dlg)
+
+        def delete_customer_row(row: dict):
+            dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Eliminar cliente"),
+                content=ft.Text(f"¿Eliminar definitivamente a '{row.get('name')}'? Esta acción no se puede deshacer."),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
+                    ft.FilledButton(
+                        "Eliminar", icon=ft.Icons.DELETE_FOREVER,
+                        on_click=lambda e: (
+                            db.delete_customer(int(row.get("id"))),
+                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Cliente eliminado."), load()
+                        ),
+                        style=ft.ButtonStyle(color=ft.Colors.WHITE, bgcolor=ft.Colors.RED_700, shape=ft.RoundedRectangleBorder(radius=5)),
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+                shape=ft.RoundedRectangleBorder(radius=5),
+            )
+            open_dialog(dlg)
 
         def load():
             list_col.controls[:] = []
             for r in db.list_customers():
                 list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
-                                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                    ft.Container(
+                        padding=ft.padding.symmetric(8,10),
+                        bgcolor=ft.Colors.GREY_50, border_radius=5,
+                        content=ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Column([
                                     ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
-                                    ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700)
-                                ]))
+                                    ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700),
+                                ], spacing=2),
+                                ft.Row([
+                                    ft.IconButton(icon=ft.Icons.EDIT, tooltip="Editar", on_click=(lambda e, _r=r: open_edit_dialog(_r))),
+                                    ft.IconButton(icon=ft.Icons.DELETE_FOREVER, tooltip="Eliminar cliente", on_click=(lambda e, _r=r: delete_customer_row(_r))),
+                                ], spacing=4),
+                            ],
+                        )
+                    )
                 )
             if not list_col.controls:
                 list_col.controls[:] = [cmp.empty_state(ft.Icons.PERSON, "Sin clientes.")]
             page.update()
 
         header = cmp.header_row("Clientes", [])
-        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf,
-                                                    ft.FilledButton("Agregar", icon=ft.Icons.SAVE, on_click=add_customer)])
+        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf, ft.FilledButton("Agregar", width=200, height=50, 
+                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)), icon=ft.Icons.SAVE, on_click=add_customer)])
         content_column.controls[:] = [
             ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
             ft.Container(padding=ft.padding.only(8,0), content=form),
             ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]; page.update(); load()
-
+        ]
+        page.update()
+        load()
 
     def render_replenishment_rules_page():
         ui_state["current_view"] = "rules"
@@ -3030,6 +3150,3 @@ def main(page: ft.Page):
 
 if __name__ == "__main__":
     ft.app(target=main)
-
-    
-    

@@ -1,0 +1,14 @@
+﻿Documento,11
+Fecha,2025-09-23 20:32:16
+Tipo,OUT
+Almacén,1
+Referencia,1234567890
+Contraparte,Joel Trincado
+Nota,Pedido con un total de 10 piezas
+Total líneas,3
+Total unidades,5
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0001,Producto 1,1,OUT,Salida manual,2025-09-23 20:32:16
+2,0002,Producto 2,1,OUT,Salida manual,2025-09-23 20:32:16
+3,0004,Producto 4,3,OUT,Salida manual,2025-09-23 20:32:16
