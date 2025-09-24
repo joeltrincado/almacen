@@ -2757,10 +2757,15 @@ def main(page: ft.Page):
             ],
         ),
         ft.SubmenuButton(
-            content=ft.Text("Contrapartes", size=14),
+            content=ft.Text("Clientes", size=14),
+            controls=[
+                cmp.menu_item("Clientes", ft.Icons.PERSON, lambda e: render_customers_page()),
+            ],
+        ),
+        ft.SubmenuButton(
+            content=ft.Text("Proveedores", size=14),
             controls=[
                 cmp.menu_item("Proveedores", ft.Icons.SUPPORT_AGENT, lambda e: render_suppliers_page()),
-                cmp.menu_item("Clientes", ft.Icons.PERSON, lambda e: render_customers_page()),
             ],
         ),
 
