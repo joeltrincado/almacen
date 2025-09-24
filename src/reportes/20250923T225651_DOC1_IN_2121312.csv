@@ -1,0 +1,14 @@
+﻿Documento,1
+Fecha,2025-09-23 22:56:51
+Tipo,IN
+Almacén,1
+Referencia,2121312
+Contraparte,Joel Trincado
+Nota,
+Total líneas,3
+Total unidades,134
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0001,Producto 1,11,IN,Entrada manual,2025-09-23 22:56:51
+2,0002,Producto 2,121,IN,Entrada manual,2025-09-23 22:56:51
+3,0003,Producto 3,2,IN,Entrada manual,2025-09-23 22:56:51

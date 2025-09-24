@@ -1,0 +1,12 @@
+﻿Documento,4
+Fecha,2025-09-23 23:36:02
+Tipo,OUT
+Almacén,1
+Referencia,31231
+Contraparte,joel
+Nota,321321
+Total líneas,1
+Total unidades,180
+
+#,Código,Nombre,Cantidad,Tipo,Nota línea,Fecha línea
+1,0001,Producto 1,180,OUT,Salida manual,2025-09-23 23:36:02

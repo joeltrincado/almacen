@@ -50,8 +50,6 @@ def main(page: ft.Page):
             "Buscar un producto": "viewer",
             "Proveedores": "operator",
             "Clientes": "operator",
-            "Reglas por producto": "supervisor",
-            "Sugerencia de compra": "supervisor",
         }
         try:
             for sm in getattr(menubar, "controls", []) or []:
@@ -83,7 +81,6 @@ def main(page: ft.Page):
             pass
         page.open(cmp.make_snackbar("info", "Sesión cerrada."))
         top_bar.visible = False
-        top_bar_icons.visible = False
         content_area.visible = False
         logo.visible = True
         page.update()
@@ -148,7 +145,6 @@ def main(page: ft.Page):
             current_user["name"] = user.get("name", "")
             current_user["role"] = user.get("role", "viewer")
             top_bar.visible = True
-            top_bar_icons.visible = True
             content_area.visible = True
             logo.visible = False
             dlg.open = False
@@ -157,6 +153,7 @@ def main(page: ft.Page):
             except Exception:
                 pass
             page.open(cmp.make_snackbar("success", f"Bienvenido, {current_user['name']}"))
+            render_dashboard_page()
             page.update()
 
         user_tf = ft.TextField(label="Usuario", autofocus=True, border_radius=5)
@@ -175,7 +172,6 @@ def main(page: ft.Page):
         page.open(dlg)
         dlg.open = True
         top_bar.visible = False
-        top_bar_icons.visible = False
         content_area.visible = False
         logo.visible = True
         page.update()
@@ -235,9 +231,6 @@ def main(page: ft.Page):
             current_dialog["dlg"].open = False
             page.update()
         current_dialog["dlg"] = None
-
-    def gradient_for(key: str):
-        return cmp.gradient_for(key, COLOR_CHOICES)  # <<--- usar componente
 
     # =========================
     #   PRODUCT DETAIL DIALOG
@@ -571,7 +564,6 @@ def main(page: ft.Page):
 
         styles = getSampleStyleSheet()
         title_style = styles["Title"]
-        meta_style = ParagraphStyle("meta", parent=styles["Normal"], fontSize=9, leading=11)
         head_style = ParagraphStyle("thead", parent=styles["Heading5"], fontSize=9, leading=11)
         cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=8, leading=10)
         cell_small = ParagraphStyle("cellSmall", parent=styles["Normal"], fontSize=8, leading=10)
@@ -765,257 +757,246 @@ def main(page: ft.Page):
         build_recent_chips()
         page.update()
 
+    
     def render_dashboard_page():
         ui_state["current_view"] = "dashboard"
-        # KPIs simples con lo que ya tienes
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
-        kpi_col = ft.Column(spacing=10)
 
-        def kpi(label: str, value: str, icon=ft.Icons.INSIGHTS):
-            return ft.Container(
-                padding=ft.padding.all(14), bgcolor=ft.Colors.GREY_50, border_radius=5,
-                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                    ft.Column(controls=[ft.Text(label, size=12, color=ft.Colors.GREY_700),
-                                        ft.Text(value, size=20, weight=ft.FontWeight.BOLD)]),
-                    ft.Icon(icon, size=28, color=ft.Colors.GREY_700)
-                ])
+        # ---- Datos para KPIs ----
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        try:
+            totals, per_wh, wh_names = hp.build_stock_indexes(db)
+        except Exception:
+            totals, per_wh, wh_names = ({}, {}, {})
+        try:
+            warehouses = db.list_warehouses() or []
+        except Exception:
+            warehouses = []
+        try:
+            products = db.list_products() or []
+        except Exception:
+            products = []
+
+        total_stock = 0
+        try:
+            total_stock = sum(int(v or 0) for v in (totals or {}).values())
+        except Exception:
+            total_stock = 0
+
+        # Movimientos de hoy
+        in_qty = out_qty = 0
+        try:
+            rows = db.list_movements(warehouse_id=None, code_or_alias=None, days=1, limit=100000) or []
+            in_qty = sum(int(r.get("qty") or 0) for r in rows if r.get("kind") in ("IN", "ADJ+") and str(r.get("ts","")).startswith(today))
+            out_qty = sum(int(r.get("qty") or 0) for r in rows if r.get("kind") in ("OUT", "ADJ-") and str(r.get("ts","")).startswith(today))
+        except Exception:
+            pass
+
+        # Bajo stock total (todos los almacenes)
+        low_total = 0
+        try:
+            for w in warehouses:
+                try:
+                    low_total += len(db.list_low_stock(w["id"], limit=999999) or [])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Sin rotación últimos 30 días (aprox)
+        cold = 0
+        try:
+            last30 = db.list_movements(warehouse_id=None, code_or_alias=None, days=30, limit=200000) or []
+            moved = {str(r.get("code")) for r in last30}
+            all_codes = {str(p.get("code")) for p in products}
+            cold = len(all_codes - moved)
+        except Exception:
+            pass
+
+        # ---- UI helpers ----
+        def kpi_card(title: str, value: str, icon, bg):
+            return ft.Card(
+                elevation=2,
+                content=ft.Container(
+                    padding=16,
+                    bgcolor=bg,
+                    border_radius=10,
+                    content=ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            ft.Column(
+                                spacing=2,
+                                controls=[
+                                    ft.Text(title, size=12, color=ft.Colors.GREY_700),
+                                    ft.Text(value, size=38, weight=ft.FontWeight.W_700),
+                                ],
+                            ),
+                            ft.Container(
+                                width=44, height=44, border_radius=10,
+                                bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.BLACK),
+                                alignment=ft.alignment.center,
+                                content=ft.Icon(icon, size=24),
+                            ),
+                        ],
+                    ),
+                ),
             )
 
-        def load():
-            # Entradas y salidas de HOY (usa list_movements con filtro days=1 y filtra por fecha == hoy)
-            rows = db.list_movements(warehouse_id=None, code_or_alias=None, days=1, limit=10000)
-            in_qty = sum(int(r["qty"]) for r in rows if r.get("kind") in ("IN","ADJ+") and str(r.get("ts","")).startswith(today))
-            out_qty= sum(int(r["qty"]) for r in rows if r.get("kind") in ("OUT","ADJ-") and str(r.get("ts","")).startswith(today))
+        # Gráfica de barras simple por almacén (ProgressBar)
+        bars = []
+        wh_totals = []
+        try:
+            for wid, cmap in (per_wh or {}).items():
+                wh_totals.append((wid, sum(int(v or 0) for v in cmap.values())))
+            wh_totals.sort(key=lambda t: t[1], reverse=True)
+        except Exception:
+            wh_totals = []
 
-            # Productos en bajo stock (usa ya tu db.list_low_stock para primer almacén si existe)
-            low_total = 0
-            ws = db.list_warehouses()
-            if ws:
-                for w in ws:
-                    try:
-                        low_total += len(db.list_low_stock(w["id"], limit=999999))
-                    except: pass
-
-            # Productos sin movimiento últimos 30 días (aproximación)
-            cold = 0
-            try:
-                last30 = db.list_movements(warehouse_id=None, code_or_alias=None, days=30, limit=100000)
-                moved = {r["code"] for r in last30}
-                all_codes = {p["code"] for p in (db.list_products() or [])}
-                cold = len(all_codes - moved)
-            except: pass
-
-            kpi_col.controls[:] = [
-                kpi("Entradas de hoy", str(in_qty), ft.Icons.LOGIN),
-                kpi("Salidas de hoy", str(out_qty), ft.Icons.LOGOUT),
-                kpi("Items en stock bajo (total)", str(low_total), ft.Icons.WARNING),
-                kpi("Sin rotación (30 días)", str(cold), ft.Icons.AC_UNIT),
-            ]
-            page.update()
-
-        header = cmp.header_row("Dashboard – Hoy", [])
-        content_column.controls[:] = [
-            ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
-            ft.Container(expand=True, padding=ft.padding.all(12), content=kpi_col),
-        ]; page.update(); load()
-
-
-    def render_locations_page():
-        ui_state["current_view"] = "locations"
-        warehouses = db.list_warehouses()
-        if not warehouses:
-            content_column.controls[:] = [cmp.empty_state(ft.Icons.WAREHOUSE, "Crea un almacén primero.")]
-            page.update(); return
-
-        wh_dd = ft.Dropdown(label="Almacén", width=260,
-                            options=[ft.dropdown.Option(str(w["id"]), text=w["name"]) for w in warehouses],
-                            value=str(warehouses[0]["id"]),
-                            on_change=lambda e: load())
-        code_tf = ft.TextField(label="Código ubicación (ej: A-01-01)", width=200)
-        name_tf = ft.TextField(label="Nombre", width=240)
-        list_col = ft.Column(spacing=6, height=380, scroll=ft.ScrollMode.AUTO)
-
-        # Asignación rápida de ubicación por producto
-        prod_code_tf = ft.TextField(label="Producto", width=160)
-        location_dd = ft.Dropdown(label="Ubicación", width=220)
-
-        def add_location(e):
-            if not code_tf.value:
-                notify("warning","Código requerido."); return
-            try:
-                db.add_location(int(wh_dd.value), code_tf.value.strip(), name_tf.value or None)
-                code_tf.value=""; name_tf.value=""; notify("success","Ubicación agregada."); load()
-            except Exception as ex:
-                notify("error", f"No se pudo agregar: {ex}")
-
-        def assign_location(e):
-            try:
-                wid = int(wh_dd.value)
-                loc_id = int(location_dd.value) if location_dd.value else None
-                code = (prod_code_tf.value or "").strip()
-                if not (code and loc_id): notify("warning","Selecciona producto y ubicación."); return
-                db.set_product_location(wid, code, loc_id)
-                notify("success","Ubicación asignada.")
-            except Exception as ex:
-                notify("error", f"No se pudo asignar: {ex}")
-
-        def load():
-            list_col.controls[:] = []
-            wid = int(wh_dd.value)
-            locs = db.list_locations(wid)
-            location_dd.options = [ft.dropdown.Option(str(l["id"]), text=f"{l['code']} {l.get('name') or ''}") for l in locs]
-            for l in locs:
-                list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
-                                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                                    ft.Text(f"{l['code']}", size=13, weight=ft.FontWeight.W_600),
-                                    ft.Text(l.get("name") or "—", size=12, color=ft.Colors.GREY_700)
-                                ]))
+        total_for_ratio = sum(v for _, v in wh_totals) or 1
+        for wid, val in wh_totals:
+            name = wh_names.get(wid, f"Almacén {wid}")
+            ratio = max(0.0, min(1.0, (val / total_for_ratio)))
+            bars.append(
+                ft.Container(
+                    padding=8,
+                    content=ft.Column(spacing=6, controls=[
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Text(name, size=12, weight=ft.FontWeight.W_600),
+                                ft.Text(str(val), size=12),
+                            ],
+                        ),
+                        ft.ProgressBar(value=ratio, height=16),
+                    ]),
                 )
-            if not list_col.controls:
-                list_col.controls[:] = [cmp.empty_state(ft.Icons.MAP, "Sin ubicaciones.")]
-            page.update()
+            )
+        if not bars:
+            bars = [cmp.empty_state(ft.Icons.SHOW_CHART, "No hay datos suficientes para la gráfica.")]
 
-        header = cmp.header_row("Ubicaciones internas", [])
-        form_add = ft.Row(wrap=True, spacing=10, controls=[wh_dd, code_tf, name_tf,
-                                                        ft.FilledButton("Agregar", 
-                            height=50, width=50, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)), icon=ft.Icons.SAVE, on_click=add_location)])
-        form_assign = ft.Row(wrap=True, spacing=10, controls=[prod_code_tf, location_dd,
-                                                            ft.FilledTonalButton("Asignar a producto", icon=ft.Icons.LABEL,
-                                                                                on_click=assign_location)])
+        # Botón refrescar
+        def refresh(e=None):
+            render_dashboard_page()
+
+        header = cmp.header_row("Dashboard", [
+            ft.FilledTonalButton("Refrescar", icon=ft.Icons.REFRESH, on_click=refresh,
+                                 style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+        ])
+
+        kpis = ft.ResponsiveRow(
+            columns=12,
+            controls=[
+                ft.Column(col={"xs":12, "sm":6, "md":3}, controls=[kpi_card("Almacenes", str(len(warehouses)), ft.Icons.WAREHOUSE, ft.Colors.BLUE_50)]),
+                ft.Column(col={"xs":12, "sm":6, "md":3}, controls=[kpi_card("Productos", str(len(products)), ft.Icons.INVENTORY_2_OUTLINED, ft.Colors.GREEN_50)]),
+                ft.Column(col={"xs":12, "sm":6, "md":3}, controls=[kpi_card("Stock total", str(total_stock), ft.Icons.STACKED_BAR_CHART, ft.Colors.AMBER_50)]),
+                ft.Column(col={"xs":12, "sm":6, "md":3}, controls=[kpi_card("Stock bajo (total)", str(low_total), ft.Icons.WARNING_AMBER, ft.Colors.RED_50)]),
+                ft.Column(col={"xs":12, "sm":6, "md":3}, controls=[kpi_card("Entradas hoy", str(in_qty), ft.Icons.LOGIN, ft.Colors.CYAN_50)]),
+                ft.Column(col={"xs":12, "sm":6, "md":3}, controls=[kpi_card("Salidas hoy", str(out_qty), ft.Icons.LOGOUT, ft.Colors.PINK_50)]),
+                ft.Column(col={"xs":12, "sm":12, "md":12}, controls=[
+                    ft.Container(
+                        padding=12,
+                        border_radius=10,
+                        bgcolor=ft.Colors.GREY_50,
+                        content=ft.Column(spacing=8, controls=[
+                            ft.Text("Distribución por almacén", size=14, weight=ft.FontWeight.W_700),
+                            ft.Column(spacing=4, controls=bars),
+                        ]),
+                    )
+                ]),
+            ],
+        )
+
         content_column.controls[:] = [
             ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
-            ft.Container(padding=ft.padding.only(8,0), content=form_add),
-            ft.Container(padding=ft.padding.only(8,0), content=form_assign),
-            ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]; page.update(); load()
-
-
-    def render_categories_units_page():
-        ui_state["current_view"] = "cat_unit"
-
-        code_tf = ft.TextField(label="Código", width=160)
-        cat_tf  = ft.TextField(label="Categoría", width=180)
-        unit_tf = ft.TextField(label="Unidad (pz/kg/m...)", width=200)
-        factor_tf = ft.TextField(label="Factor (1 por defecto)", width=160, keyboard_type=ft.KeyboardType.NUMBER, value="1")
-
-        list_col = ft.Column(spacing=6, height=420, scroll=ft.ScrollMode.AUTO)
-
-        def save(e):
-            try:
-                f = float(factor_tf.value or "1")
-                db.set_product_category_unit((code_tf.value or "").strip(), (cat_tf.value or "").strip() or None,
-                                            (unit_tf.value or "").strip() or None, f)
-                notify("success","Actualizado.")
-                load()
-            except Exception as ex:
-                notify("error", f"No se pudo actualizar: {ex}")
-
-        def load():
-            list_col.controls[:] = []
-            for p in db.list_products():
-                list_col.controls.append(
-                    ft.Container(padding=ft.padding.symmetric(8,10), bgcolor=ft.Colors.GREY_50, border_radius=5,
-                                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                                    ft.Text(f"{p['code']} – {p['name']}", size=13, weight=ft.FontWeight.W_600),
-                                    ft.Text(f"{p.get('category') or '—'} | {p.get('unit') or '—'} x {p.get('unit_factor') or 1}", size=12, color=ft.Colors.GREY_700)
-                                ]))
-                )
-            if not list_col.controls:
-                list_col.controls[:] = [cmp.empty_state(ft.Icons.CATEGORY, "No hay productos.")]
-            page.update()
-
-        header = cmp.header_row("Categorías y unidades", [])
-        form = ft.Row(wrap=True, spacing=10, controls=[code_tf, cat_tf, unit_tf, factor_tf,
-                                                    ft.FilledButton("Guardar", icon=ft.Icons.SAVE, on_click=save)])
-        content_column.controls[:] = [
-            ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
-            ft.Container(padding=ft.padding.only(8,0), content=form),
-            ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]; page.update(); load()
-
+            ft.Container(expand=True, padding=ft.padding.all(12), content=kpis),
+        ]
+        page.update()
 
     def render_suppliers_page():
         ui_state["current_view"] = "suppliers"
         name_tf = ft.TextField(label="Nombre", width=280)
         contact_tf = ft.TextField(label="Contacto", width=280)
+
         list_col = ft.Column(spacing=6, height=420, scroll=ft.ScrollMode.AUTO)
 
         def add_supplier(e):
             n = (name_tf.value or "").strip()
-            if not n:
-                notify("warning", "Nombre requerido."); return
+            if not n: notify("warning","Nombre requerido."); return
             try:
                 db.add_supplier(n, contact_tf.value or None)
-                name_tf.value = ""; contact_tf.value = ""
-                notify("success", "Proveedor agregado."); load()
+                name_tf.value = ""; contact_tf.value=""; notify("success","Proveedor agregado."); load()
             except Exception as ex:
                 notify("error", f"No se pudo guardar: {ex}")
-
-        def open_edit_dialog(row: dict):
-            _name = ft.TextField(label="Nombre", width=320, value=row.get("name") or "")
-            _contact = ft.TextField(label="Contacto", width=320, value=row.get("contact") or "")
-            dlg = ft.AlertDialog(
-                modal=True,
-                title=ft.Text(f"Editar proveedor #{row.get('id')}"),
-                content=ft.Column([_name, _contact], spacing=10, tight=True),
-                actions=[
-                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
-                    ft.FilledButton(
-                        "Guardar", icon=ft.Icons.SAVE,
-                        on_click=lambda e: (
-                            db.update_supplier(int(row.get("id")), (_name.value or "").strip(), (_contact.value or None)),
-                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Proveedor actualizado."), load()
-                        ),
-                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
-                    ),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-                shape=ft.RoundedRectangleBorder(radius=5),
-            )
-            open_dialog(dlg)
-
-
-        def delete_supplier_row(row: dict):
-            dlg = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Eliminar proveedor"),
-                content=ft.Text(f"¿Eliminar definitivamente a '{row.get('name')}'? Esta acción no se puede deshacer."),
-                actions=[
-                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
-                    ft.FilledButton(
-                        "Eliminar", icon=ft.Icons.DELETE_FOREVER,
-                        on_click=lambda e: (
-                            db.delete_supplier(int(row.get("id"))),
-                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Proveedor eliminado."), load()
-                        ),
-                        style=ft.ButtonStyle(color=ft.Colors.WHITE, bgcolor=ft.Colors.RED_700, shape=ft.RoundedRectangleBorder(radius=5)),
-                    ),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-                shape=ft.RoundedRectangleBorder(radius=5),
-            )
-            open_dialog(dlg)
 
         def load():
             list_col.controls[:] = []
             for r in db.list_suppliers():
+                def open_edit(ev, rid=r["id"]):
+                    n_tf = ft.TextField(label="Nombre", value=r["name"], width=280)
+                    c_tf = ft.TextField(label="Contacto", value=(r.get("contact") or ""), width=280)
+                    def save_edit(e2):
+                        try:
+                            db.update_supplier(rid, n_tf.value or "", c_tf.value or None)
+                            notify("success", "Proveedor actualizado.")
+                        except Exception as ex:
+                            notify("error", f"No se pudo actualizar: {ex}")
+                        dlg.open = False
+                        page.update()
+                        render_suppliers_page()
+                    def cancel_edit(e2):
+                        dlg.open = False
+                        page.update()
+                        render_suppliers_page()
+                    dlg = ft.AlertDialog(
+                        modal=True,
+                        title=ft.Text("Editar proveedor"),
+                        content=ft.Column([n_tf, c_tf], tight=True, spacing=8),
+                        actions=[
+                            ft.TextButton("Cancelar", on_click=cancel_edit),
+                            ft.FilledButton("Guardar", on_click=save_edit, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+                        ],
+                    )
+                    page.open(dlg)
+                    page.update()
+                def confirm_delete(ev, rid=r["id"], rname=r["name"]):
+                    def do_delete(e2):
+                        try:
+                            db.delete_supplier(rid)
+                            notify("info", "Proveedor eliminado.")
+                        except Exception as ex:
+                            notify("error", f"No se pudo eliminar: {ex}")
+                        dlg_del.open = False
+                        page.update()
+                        render_suppliers_page()
+                    def cancel_delete(e2):
+                        dlg_del.open = False
+                        page.update()
+                    dlg_del = ft.AlertDialog(
+                        modal=True,
+                        title=ft.Text("Eliminar Proveedor"),
+                        content=ft.Text(f"¿Seguro que quieres eliminar '{rname}'? Esta acción no se puede deshacer."),
+                        actions=[
+                            ft.TextButton("Cancelar", on_click=cancel_delete),
+                            ft.FilledButton("Eliminar", on_click=do_delete, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+                        ],
+                    )
+                    page.open(dlg_del)
+                    dlg_del.open = True
+                    page.update()
                 list_col.controls.append(
                     ft.Container(
                         padding=ft.padding.symmetric(8,10),
-                        bgcolor=ft.Colors.GREY_50, border_radius=5,
+                        bgcolor=ft.Colors.GREY_50,
+                        border_radius=5,
                         content=ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             controls=[
-                                ft.Column([
-                                    ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
-                                    ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700),
-                                ], spacing=2),
-                                ft.Row([
-                                    ft.IconButton(icon=ft.Icons.EDIT, tooltip="Editar", on_click=(lambda e, _r=r: open_edit_dialog(_r))),
-                                    ft.IconButton(icon=ft.Icons.DELETE_FOREVER, tooltip="Eliminar proveedor", on_click=(lambda e, _r=r: delete_supplier_row(_r))),
-                                ], spacing=4),
-                            ],
+                                ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
+                                ft.Row(controls=[
+                                    ft.IconButton(ft.Icons.EDIT, tooltip="Editar", on_click=open_edit),
+                                    ft.IconButton(ft.Icons.DELETE, tooltip="Eliminar", on_click=confirm_delete),
+                                ])
+                            ]
                         )
                     )
                 )
@@ -1023,16 +1004,16 @@ def main(page: ft.Page):
                 list_col.controls[:] = [cmp.empty_state(ft.Icons.SUPPORT_AGENT, "Sin proveedores.")]
             page.update()
 
+
+
         header = cmp.header_row("Proveedores", [])
-        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf, ft.FilledButton("Agregar",
-                height=50, width=200, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)), icon=ft.Icons.SAVE, on_click=add_supplier)])
+        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf,
+                                                    ft.FilledButton("Agregar", height=50, width=200, icon=ft.Icons.SAVE, on_click=add_supplier, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)))])
         content_column.controls[:] = [
             ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
             ft.Container(padding=ft.padding.only(8,0), content=form),
             ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]
-        page.update()
-        load()
+        ]; page.update(); load()
 
     def render_customers_page():
         ui_state["current_view"] = "customers"
@@ -1042,78 +1023,83 @@ def main(page: ft.Page):
 
         def add_customer(e):
             n = (name_tf.value or "").strip()
-            if not n:
-                notify("warning", "Nombre requerido."); return
+            if not n: notify("warning","Nombre requerido."); return
             try:
                 db.add_customer(n, contact_tf.value or None)
-                name_tf.value = ""; contact_tf.value = ""
-                notify("success", "Cliente agregado."); load()
+                name_tf.value = ""; contact_tf.value=""; notify("success","Cliente agregado."); load()
             except Exception as ex:
                 notify("error", f"No se pudo guardar: {ex}")
-
-        def open_edit_dialog(row: dict):
-            _name = ft.TextField(label="Nombre", width=320, value=row.get("name") or "")
-            _contact = ft.TextField(label="Contacto", width=320, value=row.get("contact") or "")
-            dlg = ft.AlertDialog(
-                modal=True,
-                title=ft.Text(f"Editar cliente #{row.get('id')}"),
-                content=ft.Column([_name, _contact], spacing=10, tight=True),
-                actions=[
-                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
-                    ft.FilledButton(
-                        "Guardar", icon=ft.Icons.SAVE,
-                        on_click=lambda e: (
-                            db.update_customer(int(row.get("id")), (_name.value or "").strip(), (_contact.value or None)),
-                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Cliente actualizado."), load()
-                        ),
-                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
-                    ),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-                shape=ft.RoundedRectangleBorder(radius=5),
-            )
-            open_dialog(dlg)
-
-        def delete_customer_row(row: dict):
-            dlg = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Eliminar cliente"),
-                content=ft.Text(f"¿Eliminar definitivamente a '{row.get('name')}'? Esta acción no se puede deshacer."),
-                actions=[
-                    ft.TextButton("Cancelar", on_click=lambda e: (setattr(dlg, "open", False), page.update(), close_dialog())),
-                    ft.FilledButton(
-                        "Eliminar", icon=ft.Icons.DELETE_FOREVER,
-                        on_click=lambda e: (
-                            db.delete_customer(int(row.get("id"))),
-                            setattr(dlg, "open", False), page.update(), close_dialog(), notify("success", "Cliente eliminado."), load()
-                        ),
-                        style=ft.ButtonStyle(color=ft.Colors.WHITE, bgcolor=ft.Colors.RED_700, shape=ft.RoundedRectangleBorder(radius=5)),
-                    ),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-                shape=ft.RoundedRectangleBorder(radius=5),
-            )
-            open_dialog(dlg)
 
         def load():
             list_col.controls[:] = []
             for r in db.list_customers():
+                def open_edit(ev, rid=r["id"]):
+                    n_tf = ft.TextField(label="Nombre", value=r["name"], width=280)
+                    c_tf = ft.TextField(label="Contacto", value=(r.get("contact") or ""), width=280)
+                    def save_edit(e2):
+                        try:
+                            db.update_customer(rid, n_tf.value or "", c_tf.value or None)
+                            notify("success", "Cliente actualizado.")
+                        except Exception as ex:
+                            notify("error", f"No se pudo actualizar: {ex}")
+                        dlg.open = False
+                        page.update()
+                        render_customers_page()
+                    def cancel_edit(e2):
+                        dlg.open = False
+                        page.update()
+                        render_customers_page()
+                    dlg = ft.AlertDialog(
+                        modal=True,
+                        title=ft.Text("Editar cliente"),
+                        content=ft.Column([n_tf, c_tf], tight=True, spacing=8),
+                        actions=[
+                            ft.TextButton("Cancelar", on_click=cancel_edit),
+                            ft.FilledButton("Guardar", on_click=save_edit, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+                        ],
+                    )
+                    page.open(dlg)
+                    dlg.open = True
+                    page.update()
+                def confirm_delete(ev, rid=r["id"], rname=r["name"]):
+                    def do_delete(e2):
+                        try:
+                            db.delete_customer(rid)
+                            notify("info", "Cliente eliminado.")
+                        except Exception as ex:
+                            notify("error", f"No se pudo eliminar: {ex}")
+                        dlg_del.open = False
+                        page.update()
+                        render_customers_page()
+                    def cancel_delete(e2):
+                        dlg_del.open = False
+                        page.update()
+                    dlg_del = ft.AlertDialog(
+                        modal=True,
+                        title=ft.Text("Eliminar Cliente"),
+                        content=ft.Text(f"¿Seguro que quieres eliminar '{rname}'? Esta acción no se puede deshacer."),
+                        actions=[
+                            ft.TextButton("Cancelar", on_click=cancel_delete),
+                            ft.FilledButton("Eliminar", on_click=do_delete, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
+                        ],
+                    )
+                    page.open(dlg_del)
+                    dlg_del.open = True
+                    page.update()
                 list_col.controls.append(
                     ft.Container(
                         padding=ft.padding.symmetric(8,10),
-                        bgcolor=ft.Colors.GREY_50, border_radius=5,
+                        bgcolor=ft.Colors.GREY_50,
+                        border_radius=5,
                         content=ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             controls=[
-                                ft.Column([
-                                    ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
-                                    ft.Text(r.get("contact") or "—", size=12, color=ft.Colors.GREY_700),
-                                ], spacing=2),
-                                ft.Row([
-                                    ft.IconButton(icon=ft.Icons.EDIT, tooltip="Editar", on_click=(lambda e, _r=r: open_edit_dialog(_r))),
-                                    ft.IconButton(icon=ft.Icons.DELETE_FOREVER, tooltip="Eliminar cliente", on_click=(lambda e, _r=r: delete_customer_row(_r))),
-                                ], spacing=4),
-                            ],
+                                ft.Text(f"{r['id']:04d} – {r['name']}", size=13, weight=ft.FontWeight.W_600),
+                                ft.Row(controls=[
+                                    ft.IconButton(ft.Icons.EDIT, tooltip="Editar", on_click=open_edit),
+                                    ft.IconButton(ft.Icons.DELETE, tooltip="Eliminar", on_click=confirm_delete),
+                                ])
+                            ]
                         )
                     )
                 )
@@ -1121,16 +1107,17 @@ def main(page: ft.Page):
                 list_col.controls[:] = [cmp.empty_state(ft.Icons.PERSON, "Sin clientes.")]
             page.update()
 
+
+
         header = cmp.header_row("Clientes", [])
-        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf, ft.FilledButton("Agregar", width=200, height=50, 
-                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)), icon=ft.Icons.SAVE, on_click=add_customer)])
+        form = ft.Row(wrap=True, spacing=10, controls=[name_tf, contact_tf,
+                                                    ft.FilledButton("Agregar", height=50, width=200, icon=ft.Icons.SAVE, on_click=add_customer, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)))])
         content_column.controls[:] = [
             ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
             ft.Container(padding=ft.padding.only(8,0), content=form),
             ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]
-        page.update()
-        load()
+        ]; page.update(); load()
+
 
     def render_replenishment_rules_page():
         ui_state["current_view"] = "rules"
@@ -1196,110 +1183,6 @@ def main(page: ft.Page):
             ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
         ]
         page.update(); load()
-
-
-    def render_cycle_counts_page():
-        ui_state["current_view"] = "counts"
-        warehouses = db.list_warehouses()
-        if not warehouses:
-            content_column.controls[:] = [cmp.empty_state(ft.Icons.WAREHOUSE, "Crea un almacén primero.")]
-            page.update(); return
-
-        wh_dd = ft.Dropdown(label="Almacén", width=260,
-                            options=[ft.dropdown.Option(str(w["id"]), text=w["name"]) for w in warehouses],
-                            value=str(warehouses[0]["id"]))
-        note_tf = ft.TextField(label="Nota del conteo", width=520)
-        category_dd = ft.Dropdown(label="Categoría (opcional)", width=260,
-                                options=[ft.dropdown.Option(c) for c in (db.list_categories() or [])])
-
-        session_id_box = ft.Text("Sesión: —", size=12)
-        list_col = ft.Column(spacing=6, height=420, scroll=ft.ScrollMode.AUTO)
-        lines = []  # [{"code","name","sys","counted"}]
-
-        def generate_session(e):
-            wid = int(wh_dd.value)
-            sid = db.create_count_session(wid, note_tf.value or None)
-            session_id_box.value = f"Sesión: {sid}"
-            # colectar productos del almacén (+ filtro categ.)
-            items = db.list_products_by_warehouse(wid)
-            cat = category_dd.value
-            if cat:
-                items = [it for it in items if (it.get("category") == cat)]
-            stock = db.get_stock_map(wid)
-            for it in items:
-                sysq = int(stock.get(it["code"], 0))
-                db.add_count_line(sid, it["code"], sysq)
-            load_session(sid)
-
-        def load_session(sid: int):
-            nonlocal lines
-            rows = db.list_count_lines(sid)
-            name_map = {p["code"]: p["name"] for p in db.list_products() or []}
-            lines = [{"code":r["code"], "name":name_map.get(r["code"], r["code"]),
-                    "sys":int(r["sys_qty"]), "counted": (r["counted_qty"] if r["counted_qty"] is not None else r["sys_qty"])}
-                    for r in rows]
-            rebuild()
-
-        def set_counted(code: str, val: str):
-            sid = int(session_id_box.value.split(":")[1].strip())
-            try: n = int(val); n = 0 if n < 0 else n
-            except: return
-            db.update_count_line(sid, code, n)
-            for x in lines:
-                if x["code"] == code: x["counted"] = n; break
-
-        def rebuild():
-            rows = []
-            for r in lines:
-                rows.append(
-                    ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                        ft.Text(f"{r['code']} – {r['name']}", size=13),
-                        ft.Row(controls=[
-                            ft.Text(f"Sist.: {r['sys']}", size=12, color=ft.Colors.GREY_700),
-                            ft.Text("Conteo:", size=12),
-                            ft.TextField(value=str(r["counted"]), width=100, keyboard_type=ft.KeyboardType.NUMBER,
-                                        on_change=lambda e, _c=r["code"]: set_counted(_c, e.control.value))
-                        ])
-                    ])
-                )
-            if not rows:
-                rows = [cmp.empty_state(ft.Icons.CHECKLIST, "Genera una sesión de conteo.")]
-            list_col.controls[:] = rows; page.update()
-
-        def reconcile(e):
-            txt = session_id_box.value
-            if "Sesión:" not in txt: return
-            sid = int(txt.split(":")[1].strip())
-            wid = int(wh_dd.value)
-            doc_id = db.reconcile_count_to_adjustments(
-                sid, wid,
-                create_movement_doc=db.create_movement_doc,
-                inc_fn=db.increment_stock,
-                dec_fn=db.decrement_stock
-            )
-            if doc_id:
-                notify("success", f"Conteo conciliado. Doc #{doc_id}")
-                rebuild()
-            else:
-                notify("warning","No hubo diferencias.")
-
-        header = cmp.header_row("Conteos cíclicos", [
-            ft.TextButton("Ver almacenes", icon=ft.Icons.WAREHOUSE, on_click=lambda e: render_warehouses()),
-        ])
-        filtros = ft.Row(wrap=True, spacing=10, controls=[wh_dd, category_dd, note_tf])
-        actions = ft.Row(spacing=10, controls=[
-            ft.FilledButton("Generar sesión", icon=ft.Icons.ADD_TASK, on_click=generate_session),
-            ft.FilledTonalButton("Conciliar diferencias", icon=ft.Icons.DONE_ALL, on_click=reconcile),
-            session_id_box
-        ])
-
-        content_column.controls[:] = [
-            ft.Container(padding=ft.padding.only(8,0,8,8), content=header),
-            ft.Container(padding=ft.padding.only(8,0), content=filtros),
-            ft.Container(padding=ft.padding.only(8,0), content=actions),
-            ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]
-        page.update()
 
 
     def render_adjustments_page():
@@ -1781,7 +1664,7 @@ def main(page: ft.Page):
         _entry_refresh_warehouse_options()
         entry_state["lines"].clear()
         entry_render_lines()
-        page.open(dlg_entry)
+        dlg_entry.open = True
         focus_entry_field()
 
     def open_entry_for(warehouse_id: int):
@@ -2204,6 +2087,7 @@ def main(page: ft.Page):
         try:
             db.transfer_stock(code, src, dst, qty, note=(transfer_note_tf.value or "Transferencia"))
         except Exception as ex:
+            print(ex)
             notify("error", f"No se pudo transferir: {ex}")
             return
 
@@ -2651,168 +2535,7 @@ def main(page: ft.Page):
     page.on_keyboard_event = on_key
 
         # =============== REPORTES: SUGERENCIA DE COMPRA ===============
-    def render_purchase_suggestions_page():
-        ui_state["current_view"] = "suggestions"
-
-        # -- Filtros --
-        warehouses = db.list_warehouses()
-        if not warehouses:
-            content_column.controls[:] = [cmp.empty_state(ft.Icons.WAREHOUSE, "Crea al menos un almacén para usar esta vista.")]
-            page.update()
-            return
-
-        wh_opts = [ft.dropdown.Option(str(w["id"]), text=w["name"]) for w in warehouses]
-        id_to_name = {w["id"]: w["name"] for w in warehouses}
-
-        wh_dd = ft.Dropdown(label="Almacén", width=280, options=wh_opts, value=wh_opts[0].key)
-        limit_tf = ft.TextField(label="Límite", width=140, value="1000", keyboard_type=ft.KeyboardType.NUMBER)
-
-        list_col = ft.Column(spacing=4, height=460, scroll=ft.ScrollMode.AUTO)
-
-        def export_csv(rows: list[dict], wid: int):
-            try:
-                folder = _ensure_reports_dir()
-                wh_name = id_to_name.get(wid, f"WH{wid}")
-                ts = hp.now_timestamp_compact() if hasattr(hp, "now_timestamp_compact") else ""
-                fname = f"{ts}_SUGERENCIAS_{_safe_slug(wh_name)}.csv"
-                path = os.path.join(folder, fname)
-                with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                    w = csv.writer(f)
-                    w.writerow(["Almacén", wh_name])
-                    w.writerow(["Generado", ts or ""])
-                    w.writerow([])
-                    w.writerow(["Código", "Nombre", "Existencia", "Umbral", "Déficit"])
-                    for r in rows:
-                        w.writerow([r["code"], r["name"], int(r["qty"] or 0), int(r["threshold"] or 0), int(r["deficit"] or 0)])
-                notify("success", f"Exportado CSV: {path}")
-            except Exception as ex:
-                notify("error", f"No se pudo exportar CSV: {ex}")
-
-        def load():
-            # Lee filtros
-                try:
-                    wid = int(wh_dd.value) if wh_dd.value else None
-                except Exception:
-                    wid = None
-                try:
-                    lim = int(limit_tf.value or "1000")
-                    if lim <= 0:
-                        lim = 1000
-                except Exception:
-                    lim = 1000
-
-                if not wid:
-                    list_col.controls[:] = [cmp.empty_state(ft.Icons.WAREHOUSE, "Selecciona un almacén.")]
-                    page.update()
-                    return
-
-                # -------- Obtener sugerencias --------
-                rows = []
-                try:
-                    # Si existe la función en tu 'database.py', úsala
-                    if hasattr(db, "list_purchase_suggestions"):
-                        rows = db.list_purchase_suggestions(wid, limit=lim) or []
-                    else:
-                        raise AttributeError("db.list_purchase_suggestions no existe")
-                except Exception:
-                    # Fallback: construir desde 'stock bajo'
-                    try:
-                        base = db.list_low_stock(wid, limit=lim) or []
-                        rows = []
-                        for r in base:
-                            qty = int(r.get("qty") or 0)
-                            thr = int(r.get("threshold") or 0)
-                            if thr > 0 and qty < thr:
-                                rows.append({
-                                    "code": r["code"],
-                                    "name": r.get("name") or "",
-                                    "qty": qty,
-                                    "threshold": thr,
-                                    "deficit": thr - qty
-                                })
-                    except Exception as ex2:
-                        notify("error", f"No se pudieron obtener sugerencias: {ex2}")
-                        rows = []
-
-                # -------- Render --------
-                items = []
-                for r in rows:
-                    chip_qty = cmp.quantity_chip(int(r.get("qty") or 0))
-                    deficit = int(r.get("deficit") or 0)
-                    threshold = int(r.get("threshold") or 0)
-                    items.append(
-                        ft.Container(
-                            padding=ft.padding.symmetric(8, 10),
-                            border_radius=5,
-                            bgcolor=ft.Colors.GREY_50,
-                            content=ft.Row(
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                controls=[
-                                    ft.Column(
-                                        spacing=2,
-                                        controls=[
-                                            ft.Text(f'{r["code"]} – {r["name"]}', size=13, weight=ft.FontWeight.W_600),
-                                            ft.Text(f'Existencia: {int(r["qty"] or 0)} • Umbral: {threshold}', size=11, color=ft.Colors.GREY_700),
-                                        ],
-                                    ),
-                                    ft.Row(
-                                        spacing=8,
-                                        controls=[
-                                            ft.Text(f"Déficit: {deficit}", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_700),
-                                            chip_qty,
-                                        ],
-                                    ),
-                                ],
-                            ),
-                        )
-                    )
-
-                if not items:
-                    items = [cmp.empty_state(ft.Icons.VERIFIED, "No hay déficit con los umbrales actuales.")]
-                list_col.controls[:] = items
-
-                # Botón exportar (dependiente de últimos resultados)
-                export_btn.on_click = lambda e, _rows=rows, _wid=wid: export_csv(_rows, _wid)
-                export_btn.disabled = (len(rows) == 0)
-
-                page.update()
-
-
-        header = cmp.header_row(
-            "Sugerencia de compra",
-            [
-                ft.TextButton("Refrescar", icon=ft.Icons.REFRESH, on_click=lambda e: load()),
-                ft.TextButton("Ver almacenes", icon=ft.Icons.WAREHOUSE, on_click=lambda e: render_warehouses()),
-            ],
-        )
-
-        export_btn = ft.FilledTonalButton(
-            "Exportar CSV", icon=ft.Icons.DOWNLOAD,
-            on_click=lambda e: None,  # se setea tras el load()
-            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5)),
-            disabled=True,
-            height=50,
-        )
-
-        filtros = ft.Row(
-            wrap=True,
-            spacing=10,
-            controls=[wh_dd, limit_tf, ft.FilledTonalButton("Aplicar filtros", icon=ft.Icons.FILTER_ALT,
-                                                            on_click=lambda e: load(), height=50,
-                                                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
-                      export_btn],
-        )
-
-        content_column.controls[:] = [
-            ft.Container(padding=ft.padding.only(8, 0, 8, 8), content=header),
-            ft.Container(padding=ft.padding.only(8, 0), content=filtros),
-            ft.Container(expand=True, padding=ft.padding.all(8), content=list_col),
-        ]
-        page.update()
-        load()
-
-
+    
     # =========================
     #   UI (COMPONENTES)
     # =========================
@@ -3007,6 +2730,13 @@ def main(page: ft.Page):
             shape=ft.RoundedRectangleBorder(radius=5), shadow_color=ft.Colors.TRANSPARENT
         ),
         controls=[
+             # Nuevo Submenu "Dashboard"
+        ft.SubmenuButton(
+            content=ft.Text("Dashboard", size=14),
+            controls=[
+                cmp.menu_item("Hoy", ft.Icons.DASHBOARD, lambda e: render_dashboard_page()),
+            ],
+        ),
         ft.SubmenuButton(
             content=ft.Text("Almacén", size=14),
             controls=[
@@ -3016,8 +2746,6 @@ def main(page: ft.Page):
                 cmp.menu_item("Entrada de productos", ft.Icons.QR_CODE, lambda e: open_entry_dialog()),
                 cmp.menu_item("Salida de productos", ft.Icons.EXIT_TO_APP, lambda e: open_exit_dialog()),
                 cmp.menu_item("Ajustes de inventario", ft.Icons.BUILD, lambda e: render_adjustments_page()),
-                cmp.menu_item("Conteos cíclicos", ft.Icons.CHECKLIST, lambda e: render_cycle_counts_page()),
-                cmp.menu_item("Ubicaciones internas", ft.Icons.MAP, lambda e: render_locations_page()),
 
             ],
         ),
@@ -3026,14 +2754,6 @@ def main(page: ft.Page):
             controls=[
                 cmp.menu_item("Ver productos", ft.Icons.INVENTORY_SHARP, handle_menu_item_click, data="products_view"),
                 cmp.menu_item("Agregar Lista de Productos", ft.Icons.FILE_OPEN, handle_menu_item_click, data="products_import", disabled=True),
-                cmp.menu_item("Categorías y unidades", ft.Icons.CATEGORY, lambda e: render_categories_units_page(), disabled=True),
-
-            ],
-        ),
-        ft.SubmenuButton(
-            content=ft.Text("Buscar", size=14),
-            controls=[
-                cmp.menu_item("Buscar un producto", ft.Icons.SEARCH, handle_menu_item_click, data="search_product"),
             ],
         ),
         ft.SubmenuButton(
@@ -3044,29 +2764,20 @@ def main(page: ft.Page):
             ],
         ),
 
-        # Nuevo Submenu "Reabastecimiento"
-        ft.SubmenuButton(
-            content=ft.Text("Reabastecimiento", size=14),
-            controls=[
-                cmp.menu_item("Reglas por producto", ft.Icons.TUNE, lambda e: render_replenishment_rules_page()),
-            ],
-        ),
-
-        # Nuevo Submenu "Dashboard"
-        ft.SubmenuButton(
-            content=ft.Text("Dashboard", size=14),
-            controls=[
-                cmp.menu_item("Hoy", ft.Icons.DASHBOARD, lambda e: render_dashboard_page()),
-            ],
-        ),
         ft.SubmenuButton(
             content=ft.Text("Reportes", size=14),
             controls=[
                 cmp.menu_item("Movimientos", ft.Icons.LIST, lambda e: render_movements_page()),
                 cmp.menu_item("Stock bajo", ft.Icons.WARNING, lambda e: render_low_stock_page()),
-                cmp.menu_item("Sugerencia de compra", ft.Icons.SHOPPING_CART, lambda e: render_purchase_suggestions_page()),
             ],
         ),
+        ft.SubmenuButton(
+            content=ft.Text("Buscar", size=14),
+            controls=[
+                cmp.menu_item("Buscar un producto", ft.Icons.SEARCH, handle_menu_item_click, data="search_product"),
+            ],
+        ),
+        
     ],
     )
     def refresh_appbar():
@@ -3103,24 +2814,7 @@ def main(page: ft.Page):
         margin=0,
         content=ft.Row(controls=[ft.Container(expand=True, content=menubar), ft.Container(width=20), session_actions_row], expand=True),  # <- fuerza a ocupar el ancho disponible
     )
-    top_bar_icons = ft.Container(
-        bgcolor=ft.Colors.BLUE_50,
-        shape=ft.RoundedRectangleBorder(radius=5),
-        height=60,
-        padding=10,
-        content=ft.Row(controls=[
-            ft.IconButton(ft.Icons.WAREHOUSE, on_click=handle_menu_item_click, data="warehouses_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
-            ft.VerticalDivider(),
-            ft.IconButton(ft.Icons.INVENTORY, on_click=handle_menu_item_click, data="products_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
-            ft.VerticalDivider(),
-            ft.IconButton(ft.Icons.SEARCH, on_click=handle_menu_item_click, data="search_product", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
-            ft.VerticalDivider(),
-            ft.IconButton(ft.Icons.DASHBOARD, on_click=handle_menu_item_click, data="dashboard_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
-            ft.VerticalDivider(),
-            ft.IconButton(ft.Icons.LIST, on_click=handle_menu_item_click, data="movements_view", style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=5))),
-        ], expand=True, spacing=10, run_spacing=10),  # <- fuerza a ocupar el ancho disponible
-    )
-
+    
     logo = ft.Image(
         src_base64="iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAYAAADL1t+KAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAE4GlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSfvu78nIGlkPSdXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQnPz4KPHg6eG1wbWV0YSB4bWxuczp4PSdhZG9iZTpuczptZXRhLyc+CjxyZGY6UkRGIHhtbG5zOnJkZj0naHR0cDovL3d3dy53My5vcmcvMTk5OS8wMi8yMi1yZGYtc3ludGF4LW5zIyc+CgogPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9JycKICB4bWxuczpBdHRyaWI9J2h0dHA6Ly9ucy5hdHRyaWJ1dGlvbi5jb20vYWRzLzEuMC8nPgogIDxBdHRyaWI6QWRzPgogICA8cmRmOlNlcT4KICAgIDxyZGY6bGkgcmRmOnBhcnNlVHlwZT0nUmVzb3VyY2UnPgogICAgIDxBdHRyaWI6Q3JlYXRlZD4yMDI1LTA5LTIyPC9BdHRyaWI6Q3JlYXRlZD4KICAgICA8QXR0cmliOkV4dElkPjdlMDY5M2JmLWI5YjYtNDczNy05MDVhLWM0YjQ4ZTA3NmJjZTwvQXR0cmliOkV4dElkPgogICAgIDxBdHRyaWI6RmJJZD41MjUyNjU5MTQxNzk1ODA8L0F0dHJpYjpGYklkPgogICAgIDxBdHRyaWI6VG91Y2hUeXBlPjI8L0F0dHJpYjpUb3VjaFR5cGU+CiAgICA8L3JkZjpsaT4KICAgPC9yZGY6U2VxPgogIDwvQXR0cmliOkFkcz4KIDwvcmRmOkRlc2NyaXB0aW9uPgoKIDxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PScnCiAgeG1sbnM6ZGM9J2h0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvJz4KICA8ZGM6dGl0bGU+CiAgIDxyZGY6QWx0PgogICAgPHJkZjpsaSB4bWw6bGFuZz0neC1kZWZhdWx0Jz5jYSBzb2Z0d2FyZSAtIDE8L3JkZjpsaT4KICAgPC9yZGY6QWx0PgogIDwvZGM6dGl0bGU+CiA8L3JkZjpEZXNjcmlwdGlvbj4KCiA8cmRmOkRlc2NyaXB0aW9uIHJk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"
     )
@@ -3131,7 +2825,7 @@ def main(page: ft.Page):
         content=ft.Column(
             controls=[
                top_bar,
-                # top_bar_icons,
+               dlg_entry,
                 content_area,
                 logo
                 
@@ -3145,8 +2839,9 @@ def main(page: ft.Page):
     open_login_dialog()
 
 
-    # Arranque en "Almacenes"
-    render_warehouses()
+    # Arranque en \"Dashboard\"
+    render_dashboard_page()
+
 
 if __name__ == "__main__":
     ft.app(target=main)

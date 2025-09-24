@@ -1092,12 +1092,36 @@ except NameError:
 
 try:
     _orig_transfer_stock = transfer_stock
-    def transfer_stock(code_or_alias: str, src_warehouse_id: int, dst_warehouse_id: int, qty: int, note: str = "Transferencia", ref_id: int | None = None, user_id: int | None = None):
-        res = _orig_transfer_stock(code_or_alias, src_warehouse_id, dst_warehouse_id, qty, note=note, ref_id=ref_id)
+    def transfer_stock(
+        code_or_alias: str,
+        src_warehouse_id: int,
+        dst_warehouse_id: int,
+        qty: int,
+        note: str = "Transferencia",
+        ref_id: int | None = None,
+        user_id: int | None = None
+    ):
+        # Ejecutar la función original (no acepta ref_id)
+        res = _orig_transfer_stock(
+            code_or_alias,
+            src_warehouse_id,
+            dst_warehouse_id,
+            qty,
+            note=note
+        )
+
+        # Guardar log de auditoría (puedes aprovechar ref_id aquí si lo necesitas)
         try:
-            log_audit(user_id, "TRANSFER_STOCK", "stock_movements", ref_id, f"{code_or_alias}|{src_warehouse_id}->{dst_warehouse_id}|{qty}|{note}")
+            log_audit(
+                user_id,
+                "TRANSFER_STOCK",
+                "stock_movements",
+                ref_id,  # aquí se guarda como referencia de auditoría
+                f"{code_or_alias}|{src_warehouse_id}->{dst_warehouse_id}|{qty}|{note}"
+            )
         except Exception:
             pass
+
         return res
 except NameError:
     pass
@@ -1179,3 +1203,19 @@ def delete_customer(customer_id: int):
     with _cur() as c:
         c.execute("DELETE FROM customers WHERE id=?", (customer_id,))
 
+# ---------------- Proveedores / Clientes ----------------
+def add_supplier_if_not_exists(name: str, contact: str | None = None):
+    if not name: 
+        return
+    with _cur() as c:
+        row = c.execute("SELECT id FROM suppliers WHERE name = ?", (name,)).fetchone()
+        if not row:
+            c.execute("INSERT INTO suppliers(name, contact) VALUES (?, ?)", (name, contact or None))
+
+def add_customer_if_not_exists(name: str, contact: str | None = None):
+    if not name:
+        return
+    with _cur() as c:
+        row = c.execute("SELECT id FROM customers WHERE name = ?", (name,)).fetchone()
+        if not row:
+            c.execute("INSERT INTO customers(name, contact) VALUES (?, ?)", (name, contact or None))

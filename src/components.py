@@ -183,3 +183,18 @@ def movement_badge(kind: str) -> ft.Container:
         bgcolor=color,
         content=ft.Text(label, size=11, weight=ft.FontWeight.W_600, color=textc),
     )
+
+def card_item(title: str, actions: list[ft.Control] = None):
+    return ft.Container(
+        bgcolor=ft.Colors.GREY_50,
+        border_radius=5,
+        padding=ft.padding.symmetric(8, 10),
+        margin=ft.margin.only(bottom=5),
+        content=ft.Row(
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            controls=[
+                ft.Text(title),
+                ft.Row(controls=actions or [])
+            ]
+        )
+    )
